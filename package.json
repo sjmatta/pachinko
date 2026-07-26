@@ -1,0 +1,34 @@
+{
+	"name": "pachinko",
+	"version": "0.1.0",
+	"private": true,
+	"type": "module",
+	"description": "A 2.5D physics-driven simulation of a modern Japanese pachinko machine",
+	"scripts": {
+		"dev": "vite",
+		"build": "vite build",
+		"preview": "vite preview",
+		"typecheck": "tsc --noEmit",
+		"lint": "biome check .",
+		"format": "biome check --write .",
+		"test": "vitest run",
+		"test:watch": "vitest",
+		"board": "tsx tools/build-board.ts",
+		"soak": "tsx tools/soak.ts",
+		"shots": "tsx tools/shots.ts"
+	},
+	"dependencies": {
+		"@dimforge/rapier2d-compat": "^0.19.3",
+		"three": "^0.185.1"
+	},
+	"devDependencies": {
+		"@biomejs/biome": "^2.5.5",
+		"@types/node": "^26.1.1",
+		"@types/three": "^0.185.0",
+		"playwright": "^1.56.1",
+		"tsx": "^4.20.6",
+		"typescript": "^5.9.3",
+		"vite": "^7.1.9",
+		"vitest": "^3.2.4"
+	}
+}

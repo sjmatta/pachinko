@@ -1,0 +1,42 @@
+name: CI
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+
+  # The board's payout rate is not something the type system can protect. A nail
+  # nudged by a millimetre can halve it, and nothing else in CI would notice —
+  # so a short headless run guards the numbers the same way the tests guard the
+  # logic.
+  balance:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Regenerate the board and check it is committed
+        run: |
+          npm run board
+          git diff --exit-code boards/ \
+            || (echo "boards/ is stale — run 'npm run board' and commit" && exit 1)
+      - name: Soak the reference board
+        run: npm run soak -- --balls 4000 --seed 33 --handle 0.4 --rightHandle 0.55
