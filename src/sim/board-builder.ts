@@ -1,4 +1,5 @@
 import type RAPIER from '@dimforge/rapier2d-compat'
+import { hubRadiusOf } from '../board/geometry'
 import type { Board } from '../board/load'
 import type { MaterialName, MoverDef, SensorDef, Vec2 } from '../board/types'
 import type { SensorKind } from '../core/sensors'
@@ -97,16 +98,34 @@ export function buildBoard(R: typeof RAPIER, world: RAPIER.World, board: Board):
 	// the residual spin left by the previous ball is a real source of variance
 	// in where the next one goes, and scripting the rotation would quietly
 	// remove that.
+	//
+	// A real 風車 is a compact disc with short vanes around its rim, sized so an
+	// 11 mm ball rides across the tips and cannot get in between them. Building
+	// it any larger makes a bucket wheel: the ball drops into a pocket between
+	// two vanes and rides round in it for the rest of the session. That was the
+	// largest single source of wedged balls on the first board.
 	for (const w of board.windmills) {
 		const anchor = world.createRigidBody(R.RigidBodyDesc.fixed().setTranslation(w.x, w.y))
 		const hub = world.createRigidBody(
 			R.RigidBodyDesc.dynamic().setTranslation(w.x, w.y).setAngularDamping(w.angularDamping),
 		)
 		const plastic = material('plastic')
+		const hubRadius = hubRadiusOf(w)
+		world.createCollider(
+			R.ColliderDesc.ball(hubRadius)
+				.setRestitution(plastic.restitution)
+				.setFriction(plastic.friction)
+				.setMass(0.001),
+			hub,
+		)
 		for (let i = 0; i < w.blades; i++) {
 			const angle = (i / w.blades) * Math.PI * 2
-			const desc = R.ColliderDesc.cuboid(w.tipRadius / 2, w.bladeWidth / 2)
-				.setTranslation((Math.cos(angle) * w.tipRadius) / 2, (Math.sin(angle) * w.tipRadius) / 2)
+			// The vane spans hub rim to tip, so it is offset to the midpoint of
+			// that span rather than to half the tip radius.
+			const half = (w.tipRadius - hubRadius) / 2
+			const mid = hubRadius + half
+			const desc = R.ColliderDesc.cuboid(half, w.bladeWidth / 2)
+				.setTranslation(Math.cos(angle) * mid, Math.sin(angle) * mid)
 				.setRotation(angle)
 				.setRestitution(plastic.restitution)
 				.setFriction(plastic.friction)

@@ -68,6 +68,13 @@ export interface WindmillDef {
 	tipRadius: number
 	bladeWidth: number
 	angularDamping: number
+	/**
+	 * Radius of the disc the vanes stand on. Defaults to a proportion of the tip
+	 * radius. This is structure, not safety: what keeps the windmill from eating
+	 * balls is the gap between the vane *tips* being narrower than a ball, which
+	 * `validateBoard` checks.
+	 */
+	hubRadius?: number
 }
 
 export interface SensorDef {

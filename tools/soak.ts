@@ -75,6 +75,9 @@ export interface SoakResult {
 	holdOverflow: number
 	/** Balls the watchdog had to drain. Anything above zero is a board bug. */
 	stuckReaped: number
+	/** …of which were motionless (a trap) rather than merely long-lived. */
+	stuckWedged: number
+	stuckAgedOut: number
 	/** Balls paid out per ball launched, over the whole run. */
 	rtp: number
 	netBalls: number
@@ -127,6 +130,18 @@ async function runOnce(
 	const s = game.stats
 	const m = game.machine
 	const launched = Math.max(1, s.launched)
+	/**
+	 * Balls the player actually paid for.
+	 *
+	 * A ball that fails to clear the rail exit slides back down the channel into
+	 * the foul hole and is refunded — it never cost anything, and on a real
+	 * machine it does not count as a shot. Dividing payout by *launches* instead
+	 * therefore reads a board with a foul problem as a board with a payout
+	 * problem: one seed here reported a 25% return that was really 84%, with the
+	 * whole difference being 71% of shots getting their money back. That is a
+	 * very effective way to spend an afternoon tuning the wrong thing.
+	 */
+	const consumed = Math.max(1, s.launched - s.fouls)
 	const paidBySmallPockets =
 		s.hesoEntries * spec.payouts.heso +
 		s.denchuEntries * spec.payouts.denchu +
@@ -137,15 +152,20 @@ async function runOnce(
 		ballsLaunched: s.launched,
 		spins: m.spins,
 		jackpots: m.jackpots,
-		spinsPer250: (m.spins / launched) * 250,
-		base: (paidBySmallPockets / launched) * 100,
+		// Per ball paid for, not per ball fired — see `consumed`. The routing
+		// figures below stay per launch, because they are about where a ball goes
+		// once it is on the board.
+		spinsPer250: (m.spins / consumed) * 250,
+		base: (paidBySmallPockets / consumed) * 100,
 		hesoRate: s.hesoEntries / launched,
 		stageShare: s.hesoEntries === 0 ? 0 : s.stageToHeso / s.hesoEntries,
 		warpRate: s.warpEntries / launched,
 		foulRate: s.fouls / launched,
 		holdOverflow: m.holds.overflow1 + m.holds.overflow2,
 		stuckReaped: game.sim.stuckReaped,
-		rtp: m.ledger.paid / launched,
+		stuckWedged: game.sim.stuckWedged,
+		stuckAgedOut: game.sim.stuckAgedOut,
+		rtp: m.ledger.paid / consumed,
 		netBalls: m.ledger.net,
 		simSeconds: ticks * SIM_DT,
 	}
@@ -187,7 +207,7 @@ handle ${r.handle.toFixed(2)}   ${r.ballsLaunched} balls   ${r.simSeconds.toFixe
   foul rate             ${pct(r.foulRate)}
   base (returned/100)   ${r.base.toFixed(1)}
   hold overflow         ${r.holdOverflow}
-  stuck (watchdog)      ${r.stuckReaped}
+  stuck (watchdog)      ${r.stuckReaped}   (${r.stuckWedged} wedged, ${r.stuckAgedOut} aged out)
   return                ${pct(r.rtp)}   net ${r.netBalls >= 0 ? '+' : ''}${r.netBalls} balls`)
 }
 

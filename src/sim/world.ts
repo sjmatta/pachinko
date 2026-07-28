@@ -26,6 +26,14 @@ export interface SimEvents {
 
 /** Longer than any honest trip down the board; see `reapStuckBalls`. */
 const STUCK_SECONDS = 45
+/**
+ * How far a ball has to get from where it was for the trip to count as
+ * progress. Wider than the jiggle `nudgeIfStalled` imparts to a wedged ball,
+ * narrower than any real leg of a journey down the board.
+ */
+const WANDER_RADIUS = 1.5
+/** Motionless for this long, within `WANDER_RADIUS`, and it is wedged. */
+const WEDGED_SECONDS = 8
 /** Below this, in world units per second, a ball counts as resting. */
 const STALL_SPEED = 2.5
 const STALL_SECONDS = 0.4
@@ -42,6 +50,10 @@ interface BallSlot {
 	age: number
 	/** Seconds spent effectively motionless. */
 	stalledFor: number
+	/** Where the ball was when it last made real progress, and how long ago. */
+	anchorX: number
+	anchorY: number
+	anchoredFor: number
 	prevX: number
 	prevY: number
 }
@@ -74,8 +86,16 @@ export class SimWorld {
 	activeCount = 0
 	/** Balls the watchdog had to drain. Should stay at zero. */
 	stuckReaped = 0
-	/** Where they were when it happened, for finding the geometry at fault. */
-	readonly stuckSpots: { x: number; y: number }[] = []
+	/**
+	 * Split by cause, because they mean different things. A wedged ball is a
+	 * hole in the board's geometry and is worth chasing; one that merely
+	 * outlived the age cap was still moving, and points at a slow circuit
+	 * rather than a trap. Counting them together hides whichever is smaller.
+	 */
+	stuckWedged = 0
+	stuckAgedOut = 0
+	/** Where they were, and how fast, for finding the geometry at fault. */
+	readonly stuckSpots: { x: number; y: number; speed: number; wedged: boolean }[] = []
 
 	private readonly queue: RAPIER.EventQueue
 	private readonly balls: BallSlot[] = []
@@ -137,6 +157,9 @@ export class SimWorld {
 				onStage: false,
 				age: 0,
 				stalledFor: 0,
+				anchorX: GARAGE.x,
+				anchorY: GARAGE.y,
+				anchoredFor: 0,
 				prevX: GARAGE.x,
 				prevY: GARAGE.y,
 			})
@@ -165,6 +188,9 @@ export class SimWorld {
 		slot.onStage = false
 		slot.age = 0
 		slot.stalledFor = 0
+		slot.anchorX = x
+		slot.anchorY = y
+		slot.anchoredFor = 0
 		slot.prevX = x
 		slot.prevY = y
 		this.activeCount++
@@ -250,7 +276,14 @@ export class SimWorld {
 	 * every shot behind it. Drain it and move on.
 	 *
 	 * This is a backstop, not a mechanism. If it ever fires in normal play the
-	 * board geometry is wrong and the count below is how you find out.
+	 * board geometry is wrong and the counts below are how you find out.
+	 *
+	 * Two tests, deliberately separate. The first asks whether the ball has got
+	 * anywhere lately, which is what "wedged" actually means and what points at
+	 * a trap in the geometry. The second is a plain age cap, which catches a
+	 * ball still moving but going nowhere useful. Reaping on age alone — as this
+	 * did originally — merges the two, and then the number cannot tell you
+	 * whether you have a hole in the board or a slow circuit.
 	 */
 	private reapStuckBalls(): void {
 		for (let id = 0; id < this.balls.length; id++) {
@@ -258,11 +291,24 @@ export class SimWorld {
 			if (!slot.active || slot.onStage) continue
 			slot.age += SIM_DT
 			this.nudgeIfStalled(slot)
-			if (slot.age < STUCK_SECONDS) continue
+
+			const t = slot.body.translation()
+			if (Math.hypot(t.x - slot.anchorX, t.y - slot.anchorY) > WANDER_RADIUS) {
+				slot.anchorX = t.x
+				slot.anchorY = t.y
+				slot.anchoredFor = 0
+			} else {
+				slot.anchoredFor += SIM_DT
+			}
+
+			const wedged = slot.anchoredFor >= WEDGED_SECONDS
+			if (!wedged && slot.age < STUCK_SECONDS) continue
+			if (wedged) this.stuckWedged++
+			else this.stuckAgedOut++
 			this.stuckReaped++
 			if (this.stuckSpots.length < 400) {
-				const t = slot.body.translation()
-				this.stuckSpots.push({ x: t.x, y: t.y })
+				const v = slot.body.linvel()
+				this.stuckSpots.push({ x: t.x, y: t.y, speed: Math.hypot(v.x, v.y), wedged })
 			}
 			this.events.emit('sensor', { kind: 'out', id: 'stuck', ballId: id })
 			this.release(id)

@@ -1,4 +1,12 @@
 import { BALL_RADIUS, NAIL_RADIUS } from '../core/units'
+import {
+	distanceToArc,
+	distanceToPolyline,
+	trapsAgainstWall,
+	vaneGapAtTip,
+	WINDMILL_CLEARANCE_RATIO,
+	windmillAdmitsBall,
+} from './geometry'
 import type { BoardFile, NailDef, Vec2 } from './types'
 
 /**
@@ -50,6 +58,8 @@ export function validateBoard(file: BoardFile): BoardIssue[] {
 		}
 	}
 
+	issues.push(...trapGapIssues(file, ballDia, nailDia / 2))
+
 	const kinds = new Set(file.sensors.map((s) => s.kind))
 	for (const required of ['heso', 'out'] as const) {
 		if (!kinds.has(required)) {
@@ -69,6 +79,77 @@ export function validateBoard(file: BoardFile): BoardIssue[] {
 			severity: 'error',
 			message: `sensor '${s.id}' (${s.x}, ${s.y}) sits inside the launch channel`,
 		})
+	}
+	return issues
+}
+
+/**
+ * The rule the first board's wedged balls all turned out to obey.
+ *
+ * A gap a shade wider than a ball, between a nail and a surface the ball cannot
+ * pass, is not a route and is not a wall — it is a slot the ball goes into and
+ * does not come out of. Roughly a quarter of every ball fired at the first
+ * reference board died in one, in four different places, and none of it was
+ * visible in the JSON or in any aggregate counter. It is cheap to check and
+ * expensive to find by hand, so it is checked here on every load.
+ *
+ * Nail-against-nail is deliberately *not* held to this standard — it has its own
+ * looser rule above. Two round nails form a saddle that opens out below, so a
+ * ball that stops there is usually only pausing. A nail against a wall forms a
+ * converging V with no way out, and that is the shape that kills.
+ */
+function trapGapIssues(file: BoardFile, ballDia: number, nailR: number): BoardIssue[] {
+	const issues: BoardIssue[] = []
+	const trap = (what: string, against: string, gap: number): void => {
+		issues.push({
+			severity: 'error',
+			message:
+				`${what} stands ${gap.toFixed(1)} mm off ${against} — ` +
+				`a corner that shape holds an ${ballDia.toFixed(1)} mm ball and never lets go`,
+		})
+	}
+
+	// Each nail is judged by its *tightest* gap, not by every wall in turn. A
+	// nail set flush against one wall has no open corner at its closest point,
+	// and whatever it happens to be a centimetre away from on the far side is
+	// the pocket mouth it forms — a route, not a trap.
+	for (const n of file.nails) {
+		const r = n.r ?? nailR
+		let gap = Number.POSITIVE_INFINITY
+		let nearest = ''
+		const consider = (id: string, d: number): void => {
+			if (d - r < gap) {
+				gap = d - r
+				nearest = id
+			}
+		}
+		for (const wall of file.walls) consider(`wall '${wall.id}'`, distanceToPolyline(n, wall.points))
+		for (const arc of file.arcs) consider(`arc '${arc.id}'`, distanceToArc(n, arc))
+		if (trapsAgainstWall(gap, ballDia)) trap(`nail ${n.id}`, nearest, gap)
+	}
+
+	// Windmills get a wider berth than anything static, and are checked against
+	// everything rather than against nails alone: the vane sweeps, so the gap it
+	// presents is only at its stated width for part of a turn, and it actively
+	// drives balls into whatever is beside it.
+	for (const w of file.windmills) {
+		if (windmillAdmitsBall(w, ballDia)) {
+			issues.push({
+				severity: 'error',
+				message:
+					`windmill '${w.id}' has ${vaneGapAtTip(w).toFixed(1)} mm between vane tips — ` +
+					`an ${ballDia.toFixed(1)} mm ball fits in and rides round in it forever`,
+			})
+		}
+		const need = w.tipRadius + ballDia * WINDMILL_CLEARANCE_RATIO
+		for (const n of file.nails) {
+			const gap = Math.hypot(n.x - w.x, n.y - w.y) - (n.r ?? nailR)
+			if (gap < need) trap(`windmill '${w.id}'`, `nail ${n.id}`, gap - w.tipRadius)
+		}
+		for (const wall of file.walls) {
+			const gap = distanceToPolyline(w, wall.points)
+			if (gap < need) trap(`windmill '${w.id}'`, `wall '${wall.id}'`, gap - w.tipRadius)
+		}
 	}
 	return issues
 }
@@ -121,6 +202,7 @@ export function loadBoard(file: BoardFile): Board {
 			y: s(w.y),
 			tipRadius: s(w.tipRadius),
 			bladeWidth: s(w.bladeWidth),
+			...(w.hubRadius === undefined ? {} : { hubRadius: s(w.hubRadius) }),
 		})),
 		sensors: file.sensors.map((d) => ({
 			...d,

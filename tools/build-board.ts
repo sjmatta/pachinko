@@ -14,6 +14,13 @@
 import { writeFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import {
+	distanceToArc,
+	distanceToPolyline,
+	FLUSH_MAX,
+	TRAP_GAP_HI_RATIO,
+	windmillNailClearance,
+} from '../src/board/geometry'
 import type {
 	ArcDef,
 	BoardFile,
@@ -22,6 +29,7 @@ import type {
 	SensorDef,
 	Vec2,
 	WallDef,
+	WindmillDef,
 } from '../src/board/types'
 import type { MachineSpec } from '../src/machine/spec'
 
@@ -76,8 +84,26 @@ const LANE_TOP_DEG = 354
 const LANE_BOTTOM_DEG = CH_START_DEG
 const GATE_DEG = 344
 const ATTACKER_ARC: [number, number] = [303, 317]
-const DENCHU_ARC: [number, number] = [324, 332]
-/** How far the pocket boxes stand proud of the outer rail. */
+const DENCHU_ARC: [number, number] = [322, 332]
+/**
+ * How far each tulip wing swings out of the rail line.
+ *
+ * Ninety degrees exactly, which puts each wing flat along the radial edge of
+ * its own pocket box. Anything less leaves the wings standing in the middle of
+ * the box, and then the notch is open but there is nowhere for the ball to go —
+ * measured at 31 catches from 4,252 balls past the gate, which reads exactly
+ * like a tulip that never opens.
+ */
+const DENCHU_SWING_DEG = 90
+/**
+ * How far the pocket boxes stand proud of the outer rail.
+ *
+ * Shallow on purpose. A ball arriving through the mouth is caught by a sensor
+ * sitting in the middle of the box, and deepening the box gives the ball room
+ * to drop past that sensor into the far corner — at 24 mm the attacker stopped
+ * registering a single ball while the round counter ran happily to completion,
+ * which is a remarkably quiet way for a machine to break.
+ */
 const POCKET_DEPTH = 17
 
 /**
@@ -106,6 +132,8 @@ const WARP = { y: 258, h: 12 }
  */
 const HESO_GAP = 12.4
 const NAIL_R = 1.4
+/** Kept here in millimetres so the placement rules read in board units. */
+const BALL_DIA = 11
 /** Everything about the start pocket sits below the centre unit's lower edge. */
 const HESO_NAIL_Y = 142
 const HESO_SENSOR_Y = 130
@@ -139,6 +167,65 @@ const clearOfUnit = (x: number, y: number, margin = 5): boolean =>
 	y > UNIT.top + margin
 
 /**
+ * Why a nail may not go here, or null if it may.
+ *
+ * Both cases are the same underlying rule: a ball caught between a nail and a
+ * surface it cannot pass never comes out. The board's boundary is the surface
+ * in the first case and a rotating blade in the second, and the second is
+ * stricter because the blade actively drives balls into the gap.
+ */
+function trapReason(x: number, y: number, hugsWall: boolean): string | null {
+	for (const w of windmills) {
+		if (Math.hypot(x - w.x, y - w.y) < windmillNailClearance(w.tipRadius, NAIL_R, BALL_DIA)) {
+			return `is inside ${w.id}'s reach`
+		}
+	}
+	// The generator holds itself to a stricter standard than `validateBoard`
+	// does. The validator has to accept any board, including one whose author
+	// deliberately set a nail flush against a wall; scattered nails have no such
+	// excuse, so here they simply stay away from walls altogether. A nail that
+	// genuinely belongs against one says `hugsWall` and is checked for actually
+	// touching it rather than hovering a few millimetres off.
+	let gap = Number.POSITIVE_INFINITY
+	let nearest = 'nothing'
+	const consider = (id: string, d: number): void => {
+		if (d - NAIL_R < gap) {
+			gap = d - NAIL_R
+			nearest = id
+		}
+	}
+	for (const wall of walls) consider(`'${wall.id}'`, distanceToPolyline({ x, y }, wall.points))
+	for (const arc of arcs) consider(`'${arc.id}'`, distanceToArc({ x, y }, arc))
+
+	if (hugsWall) {
+		return gap > FLUSH_MAX
+			? `is meant to touch a wall but stands ${gap.toFixed(1)} mm off ${nearest}`
+			: null
+	}
+	return gap < BALL_DIA * TRAP_GAP_HI_RATIO
+		? `stands ${gap.toFixed(1)} mm off ${nearest}, close enough to trap a ball in the corner`
+		: null
+}
+
+/**
+ * Slide a nail radially outward until it is tight against the rail.
+ *
+ * For a run that has to reach the rim, the boundary is the awkward part: it
+ * curves away as it descends, so a straight run drifts through the trap band on
+ * its way out to meet it. Rather than bend the run, push the offending nails the
+ * last few millimetres out to where the slot is too narrow to admit a ball at
+ * all — which is what "reaches the rim" was always trying to say.
+ */
+function pushOntoRail(x: number, y: number): [number, number, boolean] {
+	const d = Math.hypot(x - C.x, y - C.y)
+	const want = R_INNER - NAIL_R
+	// Only the outermost few are anywhere near the rail; the rest of the run is
+	// out in open field and stays exactly where it was authored.
+	if (R_INNER - d - NAIL_R >= BALL_DIA * TRAP_GAP_HI_RATIO) return [x, y, false]
+	return [C.x + ((x - C.x) * want) / d, C.y + ((y - C.y) * want) / d, true]
+}
+
+/**
  * Nails are placed through this, in order of importance.
  *
  * Deliberate runs — the pair above the start pocket, the funnel shoulders, the
@@ -155,9 +242,22 @@ class NailField {
 	/** Two free-standing nails must leave a ball room, plus a little margin. */
 	private static readonly MIN_OPEN_GAP = 11.4
 
-	add(x: number, y: number, opts: { closed?: boolean; force?: boolean } = {}): NailDef | null {
+	add(
+		x: number,
+		y: number,
+		opts: { closed?: boolean; force?: boolean; hugsWall?: boolean } = {},
+	): NailDef | null {
 		if (!opts.force && (!inField(x, y) || !clearOfUnit(x, y))) return null
 		if (!opts.force && this.tooClose(x, y, opts.closed ?? false)) return null
+		// Trap checks apply to forced nails too, but they shout rather than
+		// silently dropping: `force` means "place this exactly where I asked
+		// despite the spacing heuristics", not "build a ball trap", and a
+		// deliberate run authored into one is a mistake worth stopping the build.
+		const trap = trapReason(x, y, opts.hugsWall ?? false)
+		if (trap) {
+			if (!opts.force) return null
+			throw new Error(`forced nail at (${round(x)}, ${round(y)}) ${trap}`)
+		}
 		const n: NailDef = { id: `n${this.seq++}`, x: round(x), y: round(y) }
 		if (opts.closed) n.closed = true
 		this.nails.push(n)
@@ -287,6 +387,12 @@ const walls: WallDef[] = [
 			{ x: UNIT.right, y: UNIT.bottom + 14 },
 			{ x: UNIT.right, y: UNIT.top - 16 },
 			{ x: UNIT.right - 16, y: UNIT.top },
+			// The roof is pitched, not flat. A hundred and sixty millimetres of
+			// level plastic in the middle of the corridor is a shelf, and a ball
+			// that stops on it stays for the rest of the session. The pitch has to
+			// beat the ball-on-plastic friction angle — 0.25, so about 14° — with
+			// margin, or balls sit on it anyway.
+			{ x: 0, y: UNIT.top + 26 },
 			{ x: UNIT.left + 16, y: UNIT.top },
 			{ x: UNIT.left, y: UNIT.top - 16 },
 			{ x: UNIT.left, y: WARP.y + WARP.h / 2 },
@@ -295,15 +401,21 @@ const walls: WallDef[] = [
 	},
 	// A hood over the warp mouth. Without it every ball sliding down the unit's
 	// left face drops straight in and a fifth of the board ends up on the
-	// stage; a real warp takes a few percent. The ball now has to arrive on an
+	// stage; a real warp takes a few percent. The ball has to arrive on an
 	// upward bounce to get under the hood, which is what makes finding it feel
 	// like luck rather than routing.
+	//
+	// It descends *away* from the unit, and that direction is the whole of it.
+	// Sloped the other way — down toward the face, which is the natural way to
+	// draw a hood — its upper surface and the unit's vertical flank form a
+	// closed V, and balls rolling down the flank come to rest in it and never
+	// leave. That corner alone accounted for a twentieth of every ball fired.
 	{
 		id: 'warpHood',
 		points: [
-			{ x: UNIT.left - 9, y: WARP.y + WARP.h / 2 + 4 },
-			{ x: UNIT.left - 3, y: WARP.y + WARP.h / 2 + 1 },
-			{ x: UNIT.left, y: WARP.y + WARP.h / 2 },
+			{ x: UNIT.left, y: WARP.y + WARP.h / 2 + 8 },
+			{ x: UNIT.left - 5, y: WARP.y + WARP.h / 2 + 4 },
+			{ x: UNIT.left - 11, y: WARP.y + WARP.h / 2 - 2 },
 		],
 		material: 'plastic',
 	},
@@ -321,22 +433,18 @@ const walls: WallDef[] = [
 	},
 
 	// The start pocket cup, directly under the 命釘.
-	{
-		id: 'hesoCupLeft',
-		points: [
-			{ x: -15, y: HESO_NAIL_Y - 4 },
-			{ x: -7.5, y: HESO_SENSOR_Y - 6 },
-		],
-		material: 'pocket',
-	},
-	{
-		id: 'hesoCupRight',
-		points: [
-			{ x: 15, y: HESO_NAIL_Y - 4 },
-			{ x: 7.5, y: HESO_SENSOR_Y - 6 },
-		],
-		material: 'pocket',
-	},
+	//
+	// Each wall begins *on* the nail above it rather than a few millimetres
+	// inboard. Set it back and the nail and the cup lip form an open corner a
+	// ball's width across, in the one place on the board where every ball is
+	// heading — and balls settle into it instead of falling through the gap.
+	// Starting flush leaves no corner at all: the 命釘 gap simply becomes the
+	// mouth of the cup, which is what it looks like on a real board anyway.
+	//
+	// The walls diverge slightly on the way down. A funnel that narrows would
+	// wedge a ball above the sensor; widening cannot.
+	hesoCupWall('hesoCupLeft', -1),
+	hesoCupWall('hesoCupRight', 1),
 
 	/**
 	 * 返し — the hood over the rail exit, and the single most important piece
@@ -380,8 +488,8 @@ const walls: WallDef[] = [
 	// what keeps the base rate up during ordinary play. Both sit on the left,
 	// because the left is the normal-play route: the right side of the board
 	// belongs to the tulip and the attacker.
-	sidePocketWall('sideL1', -96, 78),
-	sidePocketWall('sideL2', 96, 78),
+	sidePocketWall('sideL1', -96, 104),
+	sidePocketWall('sideL2', 96, 104),
 ]
 
 /**
@@ -392,7 +500,27 @@ const walls: WallDef[] = [
  * three balls a time that alone puts the machine near 180% return. Guarding it
  * with nails does not help — they funnel too. The mouth itself has to be the
  * width of a ball and no more.
+ *
+ * It also has to sit well clear of the drain floor, and that is not a detail.
+ * Sat a centimetre above it, the box's outer wall is a dam: the floor slopes
+ * down from the left, the wall's underside stops a ball dead, and the balls
+ * behind it stack up until a dozen are parked in the corner. Rapier's contact
+ * query is what finally showed it — every ball in the heap was resting on other
+ * balls, not on any piece of the board.
  */
+/** One side of the start-pocket cup, hung off the 命釘 on that side. */
+function hesoCupWall(id: string, side: -1 | 1): WallDef {
+	const nailX = side * (HESO_GAP / 2 + NAIL_R)
+	// A point on the nail's surface, on the pocket side and just below centre,
+	// so wall and nail touch and there is no notch between them.
+	const from = { x: nailX - side * NAIL_R * 0.7, y: HESO_NAIL_Y - NAIL_R * 0.7 }
+	return {
+		id,
+		points: [from, { x: side * 8.5, y: HESO_SENSOR_Y - 6 }],
+		material: 'pocket',
+	}
+}
+
 function sidePocketWall(id: string, x: number, y: number): WallDef {
 	return {
 		id,
@@ -406,6 +534,47 @@ function sidePocketWall(id: string, x: number, y: number): WallDef {
 	}
 }
 
+// ── Windmills ──────────────────────────────────────────────────────────────
+
+/**
+ * A 20 mm six-vane wheel, and both numbers matter.
+ *
+ * It is *small*, so the 7.9 mm gap between vane tips will not admit an 11 mm
+ * ball: the ball crosses the tips and is flicked sideways, which is what a real
+ * 風車 does. The first board used a 28 mm four-vane wheel, whose 19 mm tip gaps
+ * swallowed balls whole and rode them round forever — the single largest source
+ * of wedged balls on it. A hub was tried first and did not help, because the
+ * hub only closes the gap at the axis and the ball was never getting that far.
+ *
+ * They are declared before the nails because the nail placer has to know where
+ * they are: anything a few millimetres off the vane tips is a press, the vane
+ * driving a ball onto whatever is fixed beside it. The first board's lattice was
+ * laid down with no idea the windmills existed and put a nail *inside* the swept
+ * circle — and the warp scoop's outer tip reached to within 3.4 mm of it, which
+ * turned out to be what was actually eating the balls blamed on the wheel.
+ * `validateBoard` now checks the swept circle against everything.
+ */
+const windmills: WindmillDef[] = [
+	{
+		id: 'windmillL',
+		x: -150,
+		y: 292,
+		blades: 6,
+		tipRadius: 10,
+		bladeWidth: 2.6,
+		angularDamping: 0.5,
+	},
+	{
+		id: 'windmillR',
+		x: 150,
+		y: 292,
+		blades: 6,
+		tipRadius: 10,
+		bladeWidth: 2.6,
+		angularDamping: 0.5,
+	},
+]
+
 // ── Nails ──────────────────────────────────────────────────────────────────
 
 const field = new NailField()
@@ -413,8 +582,8 @@ const field = new NailField()
 // 命釘 — the pair above the start pocket. Placed first and forced, because
 // every other nail on the board is negotiable and these two are not.
 const HESO_NAIL_X = HESO_GAP / 2 + NAIL_R
-field.add(-HESO_NAIL_X, HESO_NAIL_Y, { force: true })
-field.add(HESO_NAIL_X, HESO_NAIL_Y, { force: true })
+field.add(-HESO_NAIL_X, HESO_NAIL_Y, { force: true, hugsWall: true })
+field.add(HESO_NAIL_X, HESO_NAIL_Y, { force: true, hugsWall: true })
 
 /**
  * 寄り釘 — the gathering nails, and the approach to the start pocket.
@@ -479,14 +648,25 @@ const RAMP_TOP_Y = 196
  * nothing.
  */
 const RAMP_TOP_X = Math.sqrt(R_INNER ** 2 - (RAMP_TOP_Y - C.y) ** 2)
+/**
+ * Where the ramp stops, short of the start-pocket cup.
+ *
+ * The gap between the ramp's last nail and the cup's outer lip is the route a
+ * ball takes when it misses the 命釘, so it has to be comfortably wider than a
+ * ball. At 20 it was 11.6 mm — a ball fits in and does not come out, and it is
+ * the worst possible place on the board for that, a centimetre from the pocket
+ * every ball is aiming at.
+ */
+const RAMP_INNER_X = 26
 for (const s of [-1, 1]) {
 	for (let i = 0; i < RAMP_COUNT; i++) {
 		if (LEAKS.has(i)) continue
 		const t = i / (RAMP_COUNT - 1)
-		field.add(s * (RAMP_TOP_X - (RAMP_TOP_X - 20) * t), RAMP_TOP_Y - 46 * t, {
-			closed: true,
-			force: true,
-		})
+		const [x, y, hugsWall] = pushOntoRail(
+			s * (RAMP_TOP_X - (RAMP_TOP_X - RAMP_INNER_X) * t),
+			RAMP_TOP_Y - 46 * t,
+		)
+		field.add(x, y, { closed: true, force: true, hugsWall })
 	}
 }
 
@@ -524,17 +704,21 @@ field.add(133, 268)
 field.add(168, 282)
 field.add(158, 246)
 
-// Nails in the right lane itself, to break the ball's descent.
+// No nails in the right lane.
 //
-// Without them a ball arrives at the attacker doing three metres a second and
-// is thrown against the outer rail by the curve, so it crosses a thirty-
-// millimetre open mouth in ten milliseconds and falls half a millimetre. It
-// sails over the pocket every time, and a jackpot pays out nothing at all while
-// the round counter runs happily to completion.
-for (const deg of [349, 341, 334, 327, 320, 312]) {
-	const p = polar(deg, R_INNER + 8)
-	field.add(p.x, p.y, { force: true })
-}
+// Six were tried, at R_INNER + 8, to break the ball's descent. The lane is
+// 19 mm wide and the ball is 11 mm, so a 2.8 mm nail anywhere in it leaves
+// 6.6 mm on one side and 9.6 mm on the other: a ball fits in neither and jams
+// in both. There is no position in a lane this narrow where a free-standing
+// nail is not a trap, and they were the third-largest source of wedged balls.
+//
+// They also turned out to be unnecessary. The worry was that a ball crosses the
+// attacker mouth in ten milliseconds and falls only half a millimetre in that
+// time, so it could never drop in. But it does not drop in — it is thrown in.
+// At three metres a second round a 215 mm rail the ball needs forty times
+// gravity to hold its line, and the only thing supplying it is the rail. Take
+// the rail away, which is exactly what the shutter withdrawing does, and the
+// ball leaves along the tangent and straight into the pocket box.
 
 // Upper field scatter: the chaos that makes two identical shots land
 // differently.
@@ -577,8 +761,8 @@ const sensors: SensorDef[] = [
 	// The right lane drains to the same place everything else does.
 	{ id: 'outLane', kind: 'out', x: round(laneDrain.x), y: round(laneDrain.y), w: 22, h: 22 },
 	{ id: 'warp', kind: 'warp', x: UNIT.left + 5, y: WARP.y, w: 12, h: 13 },
-	{ id: 'sidePocketL1', kind: 'sidePocket', x: -96, y: 74, w: 11, h: 8 },
-	{ id: 'sidePocketL2', kind: 'sidePocket', x: 96, y: 74, w: 11, h: 8 },
+	{ id: 'sidePocketL1', kind: 'sidePocket', x: -96, y: 100, w: 11, h: 8 },
+	{ id: 'sidePocketL2', kind: 'sidePocket', x: 96, y: 100, w: 11, h: 8 },
 	// アウト口 — everything that reaches the bottom of the playfield.
 	//
 	// It has to sit clear above the drain floor's lowest point, because the
@@ -634,9 +818,20 @@ const movers: MoverDef[] = [
 		},
 	},
 	// 電チュー — the tulip. Closed, the wings lie flat across the notch and the
-	// lane reads as unbroken rail; open, they stand up into the lane and scoop
-	// balls in. Both states are real geometry, which is why the tulip's open
-	// window being measured in tenths of a second actually matters.
+	// lane reads as unbroken rail. Both states are real geometry, which is why
+	// the tulip's open window being measured in tenths of a second matters.
+	//
+	// They open *outward*, into the pocket box, and that direction is not a
+	// stylistic choice. A wing long enough to seal the notch is thirty
+	// millimetres, and the lane is nineteen wide: swing that inward, as a tulip
+	// drawn on paper does, and it sweeps clean across the lane and mashes any
+	// ball there against the inner wall. That was the last wedge left on the
+	// board once the drain was cleared.
+	//
+	// Opening outward also works for the same reason the attacker does: the ball
+	// is held on its line by the rail, so removing the rail at the notch is
+	// enough on its own. It leaves along the tangent, into the box. The wings do
+	// not need to reach out and scoop — they only need to get out of the way.
 	{
 		id: 'denchuWingL',
 		kind: 'denchuWing',
@@ -646,7 +841,7 @@ const movers: MoverDef[] = [
 		halfW: round(arcWidth(DENCHU_ARC) / 2),
 		halfH: 1.4,
 		closedDeg: round(DENCHU_ARC[0] + 90),
-		openDeg: round(DENCHU_ARC[0] + 152),
+		openDeg: round(DENCHU_ARC[0] + 90 - DENCHU_SWING_DEG),
 	},
 	{
 		id: 'denchuWingR',
@@ -657,7 +852,7 @@ const movers: MoverDef[] = [
 		halfW: round(arcWidth(DENCHU_ARC) / 2),
 		halfH: 1.4,
 		closedDeg: round(DENCHU_ARC[1] - 90),
-		openDeg: round(DENCHU_ARC[1] - 152),
+		openDeg: round(DENCHU_ARC[1] - 90 + DENCHU_SWING_DEG),
 	},
 ]
 
@@ -693,7 +888,7 @@ const spec: MachineSpec = {
 			weight: 55,
 			rounds: 4,
 			st: true,
-			stSpins: 60,
+			stSpins: 80,
 			jitanSpins: 0,
 		},
 		{
@@ -702,7 +897,7 @@ const spec: MachineSpec = {
 			weight: 20,
 			rounds: 8,
 			st: true,
-			stSpins: 60,
+			stSpins: 80,
 			jitanSpins: 0,
 		},
 		{
@@ -716,17 +911,24 @@ const spec: MachineSpec = {
 		},
 	],
 
-	ballsPerRound: 9,
+	ballsPerRound: 10,
 	roundTimeoutMs: 25_000,
 	roundIntervalMs: 1_600,
 
-	payouts: { heso: 3, denchu: 2, attacker: 14, sidePocket: 2 },
+	// 15 for the 大入賞口 is the value real machines almost always use, and it is
+	// the right lever for the last few points of return: it scales the jackpot
+	// half of the payout without touching the spin rate or the base.
+	payouts: { heso: 3, denchu: 1, attacker: 15, sidePocket: 2 },
 
 	holdCapacity: 4,
 	gateHoldCapacity: 4,
 
 	denchuOpenMsNormal: 260,
-	denchuOpenMsSupport: 3_400,
+	// A short burst per gate win, not a held-open tulip. At 3.4 s the wings were
+	// effectively open for the whole of ST: the hold queue overflowed 895 times
+	// in an 8,000-ball run, which is the machine telling you it is feeding spins
+	// faster than it can play them, and the return sat near 130%.
+	denchuOpenMsSupport: 1_100,
 
 	spinMs: { none: 4_200, nearMiss: 9_000, reach: 11_000, superReach: 22_000 },
 	symbolCount: 8,
@@ -800,26 +1002,7 @@ const board: BoardFile = {
 	walls,
 	arcs,
 	nails,
-	windmills: [
-		{
-			id: 'windmillL',
-			x: -128,
-			y: 248,
-			blades: 4,
-			tipRadius: 14,
-			bladeWidth: 2.6,
-			angularDamping: 0.8,
-		},
-		{
-			id: 'windmillR',
-			x: 128,
-			y: 248,
-			blades: 4,
-			tipRadius: 14,
-			bladeWidth: 2.6,
-			angularDamping: 0.8,
-		},
-	],
+	windmills,
 	sensors,
 	movers,
 	stage: {

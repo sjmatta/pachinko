@@ -1,4 +1,5 @@
 import * as THREE from 'three'
+import { hubRadiusOf } from '../board/geometry'
 import type { Board } from '../board/load'
 import type { Vec2 } from '../board/types'
 import { NAIL_RADIUS } from '../core/units'
@@ -117,22 +118,35 @@ export function buildPlayfield(board: Board): PlayfieldParts {
 	})
 	objects.push(nails, head)
 
+	// Drawn as the solid disc and rim vanes the windmill physically is, rather
+	// than as a four-armed star. If the picture disagrees with the colliders the
+	// player watches balls bounce off nothing.
 	for (const w of board.windmills) {
 		const hub = new THREE.Group()
 		hub.position.set(w.x, w.y, 0.7)
+		const vaneMaterial = new THREE.MeshStandardMaterial({
+			color: 0x6fd3ff,
+			metalness: 0.5,
+			roughness: 0.3,
+			emissive: 0x0a3550,
+			emissiveIntensity: 1.2,
+		})
+		const hubRadius = hubRadiusOf(w)
+		const disc = new THREE.Mesh(
+			new THREE.CylinderGeometry(hubRadius, hubRadius, 0.5, 24),
+			vaneMaterial,
+		)
+		disc.rotation.x = Math.PI / 2
+		hub.add(disc)
+		const vaneLength = w.tipRadius - hubRadius
 		for (let i = 0; i < w.blades; i++) {
 			const blade = new THREE.Mesh(
-				new THREE.BoxGeometry(w.tipRadius, w.bladeWidth, 0.5),
-				new THREE.MeshStandardMaterial({
-					color: 0x6fd3ff,
-					metalness: 0.5,
-					roughness: 0.3,
-					emissive: 0x0a3550,
-					emissiveIntensity: 1.2,
-				}),
+				new THREE.BoxGeometry(vaneLength, w.bladeWidth, 0.5),
+				vaneMaterial,
 			)
 			const a = (i / w.blades) * Math.PI * 2
-			blade.position.set((Math.cos(a) * w.tipRadius) / 2, (Math.sin(a) * w.tipRadius) / 2, 0)
+			const mid = hubRadius + vaneLength / 2
+			blade.position.set(Math.cos(a) * mid, Math.sin(a) * mid, 0)
 			blade.rotation.z = a
 			hub.add(blade)
 		}

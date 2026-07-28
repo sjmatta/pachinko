@@ -115,11 +115,11 @@ adjustment is discussed in, and converted to world units exactly once in
 `tools/build-board.ts` generates it parametrically (`npm run board`), so a nail
 row can be re-angled in one edit rather than by hand-writing coordinates.
 
-`validateBoard` runs on every load and catches the two mistakes that actually
-happen: nails too close together to pass a ball (a wall where a route was meant),
-and board furniture accidentally authored **inside the launch channel** — which
-looks like an ordinary lower-left coordinate but quietly swallows every ball ever
-fired.
+`validateBoard` runs on every load and catches the mistakes that actually happen:
+nails too close together to pass a ball (a wall where a route was meant), board
+furniture accidentally authored **inside the launch channel** — which looks like
+an ordinary lower-left coordinate but quietly swallows every ball ever fired —
+and the family of ball traps described under *Wedged balls* below.
 
 `tools/dev/board-svg.ts` draws the board and a few hundred ball tracks as an SVG.
 Nail placement is a spatial problem and reading it back out of aggregate counters
@@ -133,23 +133,39 @@ firing at one fixed handle position models a player who ignores the sign and
 silently destroys the return figure — ST is fed entirely from the right side of
 the board.
 
-Current reference board, 10,000 balls, seed 33, handle 0.40 / 0.55:
+Payout figures are per ball **paid for**, not per ball fired. A ball that fails
+to clear the rail exit slides back into the foul hole and is refunded, so it was
+never a shot; dividing by launches instead reads a board with a foul problem as a
+board with a payout problem. One seed reported a 25% return that was really 84%,
+the entire difference being 71% of shots getting their money back.
 
-| | measured | real machines |
+Current reference board — **eight seeds × 12,000 balls**, handle 0.38 / 0.55:
+
+| | mean of 8 seeds | real machines |
 |---|---|---|
-| spins per 250 balls | 12.9 | 15–25 |
-| start-pocket rate | 4.2% (1 in 24) | ~1 in 15 |
-| warp rate | 1.9% | 3–8% |
-| foul rate | 0.9% | low |
-| base (returned per 100) | 69 | 25–35 |
-| **return** | **99.2%** | 85–100% |
+| spins per 250 balls | 14.9 | 15–25 |
+| start-pocket rate | 3.4% (1 in 29) | ~1 in 15 |
+| foul rate | 0.3% | low |
+| stuck (watchdog) | 0.07% | 0 |
+| base (returned per 100) | 30.1 | 25–35 |
+| **return** | **98.4%** | 85–100% |
 
-Net over ten thousand balls: **+10**. The return and the foul rate are where they
-should be; the spin rate is a little low and the base a little high, both of which
-are nail-placement work rather than code.
+**Read the return figure with its spread.** Across those eight seeds it ranged
+from 50% to 171%. That is not instability in the simulation — it is the ST chain,
+and it is authentic: 12,000 balls contains only about seven jackpots, and whether
+two or three of them chain decides the whole number. The consequence for tuning
+is concrete: **a single seed tells you almost nothing about return**, and the
+spread is wide enough that the mean of eight is only good to roughly ±15 points.
+Tune return with several seeds or not at all. The other rows are high-count
+statistics and are stable to within a point or two per seed.
+
+The one figure still off is the start-pocket rate, at about half a real machine's.
+The spin rate lands in band anyway because the machine pays more per spin, but a
+real board feeds its start pocket harder than this one does. Raising it means
+re-tuning return alongside it, since the two move together.
 
 ```bash
-npm run soak -- --balls 20000 --seed 7 --handle 0.4 --rightHandle 0.55
+npm run soak -- --balls 20000 --seed 7 --handle 0.38 --rightHandle 0.55
 npm run soak -- --sweep handle:0.2:1.0:0.05 --balls 4000
 npm run soak -- --sweep hesoGap:11.2:13.0:0.2 --balls 4000
 ```
@@ -168,13 +184,60 @@ documented at the code:
   of each one, so on a shallow ramp it simply stops. Packing them closer flattens
   the notches.
 
-### Known defect
+## Wedged balls, and the rule that came out of it
 
-About a quarter of balls still wedge somewhere on the board and are drained by
-the watchdog in `sim/world.ts` (`stuck` in the soak report). The watchdog keeps
-the pool healthy and the session playable, but every reaped ball is a ball that
-should have reached a pocket, and it is suppressing the spin rate. This is board
-geometry, not engine behaviour. `tools/dev/probe.ts` reports where they stop.
+The first version of this board lost **29% of every ball fired at it**. They did
+not drain — they stopped somewhere and stayed there, and a watchdog in
+`sim/world.ts` swept them up so the session stayed playable. Since a reaped ball
+is a ball that never reached a pocket, every balance figure downstream was wrong.
+
+Four separate mechanisms, and none of them visible in the JSON:
+
+- **The side pockets dammed the drain.** Their box walls floated five
+  millimetres above the drain floor, so balls sliding down from the left hit the
+  underside of a wall and stopped, and the balls behind them stacked up until a
+  dozen were parked in the corner. This was the biggest one, and the least
+  obvious: the balls in the heap were resting on *each other*, so every
+  measurement that looked for nearby board geometry found nothing.
+- **The windmills were bucket wheels.** A 28 mm four-vane wheel has 19 mm gaps
+  between its vane tips, so an 11 mm ball dropped in between two vanes and rode
+  round in it forever. A real 風車 is small enough that the ball crosses the tips
+  and never gets in. Fitting a hub does not help — the ball was never reaching
+  the axis.
+- **The warp hood sloped the wrong way.** Its upper surface ran down *toward* the
+  centre unit's flank, so the two formed a closed V and balls rolling down the
+  flank came to rest in it.
+- **The tulip wings swept across the lane.** A wing long enough to seal a 30 mm
+  notch is 30 mm long, and the lane is 19 mm wide: opening inward, as a tulip
+  drawn on paper does, mashes any ball in the lane against the inner wall. They
+  now swing 90° outward and lie flat along their own pocket box.
+- **The centre unit's roof was flat**, and 160 mm of level plastic in the middle
+  of the corridor is a shelf. This one hid behind a symptom that pointed
+  somewhere else entirely: it presented as a **foul cascade**, one seed in four
+  suddenly sending 71% of shots back down the launch channel after two thousand
+  clean balls. The parked ball was nowhere near the channel — it was deflecting
+  the shots that had to fly over the unit to reach the right lane. The roof is
+  now pitched at 18°, comfortably past the ball-on-plastic friction angle.
+
+The general rule, now enforced by `validateBoard` and by the generator:
+
+> A nail standing a few millimetres off a wall is a trap. **Flush or clear** —
+> nothing in between.
+
+The instinct is to look for a slot slightly *wider* than a ball. That is the
+wrong shape. Balls were measured wedged at nail-to-wall gaps of 6.8, 8.6 and
+9.3 mm, every one of them narrower than the ball stuck in it. What holds the ball
+is not the width of the gap, it is the corner: a V that converges downward, which
+the ball rolls into from above and which nothing can then push it out of.
+
+Two tools made this findable, and both are worth reaching for before theorising:
+`tools/dev/probe.ts` bins reaped balls against *named* geometry, and Rapier's
+`world.contactPairsWith` will simply tell you what a stopped ball is touching —
+which is how the pile-up was finally identified after three wrong guesses.
+
+The watchdog now distinguishes **wedged** (motionless, a hole in the board) from
+**aged out** (still moving, just going nowhere), because a single number merged
+the two and hid whichever was smaller.
 
 ## Targets
 
