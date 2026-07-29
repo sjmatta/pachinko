@@ -139,30 +139,49 @@ never a shot; dividing by launches instead reads a board with a foul problem as 
 board with a payout problem. One seed reported a 25% return that was really 84%,
 the entire difference being 71% of shots getting their money back.
 
-Current reference board — **eight seeds × 12,000 balls**, handle 0.38 / 0.55:
+The spin rate has two traps in its definition, and getting either wrong flatters
+the board by a third. **回転率 counts normal-play spins only** — spins the electric
+tulip buys during ST are not what the player is spending money on. And it is per
+250 balls **bought**, not launched: every ball a pocket returns gets fired again,
+so a machine with a base of 30 launches about 357 balls for each 250 paid for.
+Measured the loose way, this board read 14.9; measured properly it was 12.2, and
+the difference was entirely ST spins and recycled balls.
+
+Current reference board — **eight seeds × 10,000 balls**, handle 0.38 / 0.55:
 
 | | mean of 8 seeds | real machines |
 |---|---|---|
-| spins per 250 balls | 14.9 | 15–25 |
-| start-pocket rate | 3.4% (1 in 29) | ~1 in 15 |
-| foul rate | 0.3% | low |
+| 回転率 (spins per 250 bought) | 22.7 | 15–25 |
+| start-pocket rate | 4.9% (1 in 20) | 1 in 15–20 |
+| foul rate | 0.25% | low |
 | stuck (watchdog) | 0.07% | 0 |
-| base (returned per 100) | 30.1 | 25–35 |
-| **return** | **98.4%** | 85–100% |
+| base (returned per 100) | 30.0 | 25–35 |
+| **return** | **91.3%** | 85–100% |
 
 **Read the return figure with its spread.** Across those eight seeds it ranged
-from 50% to 171%. That is not instability in the simulation — it is the ST chain,
-and it is authentic: 12,000 balls contains only about seven jackpots, and whether
+from 59% to 158%. That is not instability in the simulation — it is the ST chain,
+and it is authentic: 10,000 balls contains only about six jackpots, and whether
 two or three of them chain decides the whole number. The consequence for tuning
 is concrete: **a single seed tells you almost nothing about return**, and the
 spread is wide enough that the mean of eight is only good to roughly ±15 points.
-Tune return with several seeds or not at all. The other rows are high-count
-statistics and are stable to within a point or two per seed.
+Tune return with several seeds or not at all — and once you are inside that
+error bar, stop, because further adjustment is fitting noise. The other rows are
+high-count statistics, stable to within a point or two per seed, and can be tuned
+from a single 6,000-ball run.
 
-The one figure still off is the start-pocket rate, at about half a real machine's.
-The spin rate lands in band anyway because the machine pays more per spin, but a
-real board feeds its start pocket harder than this one does. Raising it means
-re-tuning return alongside it, since the two move together.
+The four figures move together, which is what makes tuning a machine a loop
+rather than four independent dials:
+
+```
+回転率 = 250 × (start-pocket rate) / (1 − base/100)
+```
+
+Feeding the start pocket harder raises the spin rate *and* the base — and the
+base then recycles more balls, raising the spin rate again. It also multiplies
+the jackpot frequency, so the payout side has to come down to compensate. Going
+from 1 in 29 to 1 in 20 at the start pocket meant closing one ramp leak, halving
+the 一般入賞口 payout to hold the base at 30, and cutting ST from 80 spins to 55
+to hold the return.
 
 ```bash
 npm run soak -- --balls 20000 --seed 7 --handle 0.38 --rightHandle 0.55

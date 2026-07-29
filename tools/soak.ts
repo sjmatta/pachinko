@@ -59,9 +59,20 @@ export interface SoakResult {
 	spins: number
 	jackpots: number
 	/**
-	 * The headline number. Real machines are specified as "spins per ¥1000",
-	 * and ¥1000 buys 250 balls, so this is the figure a player reads off the
-	 * board before deciding whether to sit down. Typical tuning: 15–25.
+	 * 回転率 — the headline number, and the one figure a player judges a machine
+	 * by before sitting down. Typical tuning: 15–25.
+	 *
+	 * Its definition has two traps in it, and getting either wrong flatters the
+	 * board by half:
+	 *
+	 * It counts **normal-play spins only**. Spins bought by the electric tulip
+	 * during ST are not what the player is buying with their money — including
+	 * them here reported this board at 14.9 when its true rate was 12.2.
+	 *
+	 * And it is per ¥1000 = 250 balls **bought**, not launched. Every ball a
+	 * pocket returns gets fired again, so a machine with a base of 30 launches
+	 * about 357 balls for every 250 the player pays for, and dividing by launches
+	 * undercounts the spins each ¥1000 actually buys.
 	 */
 	spinsPer250: number
 	/** Balls returned per 100 launched during ordinary play. Real: ~25–35. */
@@ -108,6 +119,22 @@ async function runOnce(
 	const follow = () => game.setHandle(game.machine.hitSide === 'RIGHT' ? rightHandle : handle, true)
 	follow()
 
+	// 回転率 is measured during normal play, so the counters that feed it only
+	// run while the machine is in normal play. See `spinsPer250`.
+	let normalLaunched = 0
+	let normalPaid = 0
+	let normalSpins = 0
+	const inNormal = () => game.machine.mode === 'NORMAL'
+	game.sim.events.on('launched', () => {
+		if (inNormal()) normalLaunched++
+	})
+	game.machine.events.on('payout', ({ count }) => {
+		if (inNormal()) normalPaid += count
+	})
+	game.machine.events.on('spinStart', () => {
+		if (inNormal()) normalSpins++
+	})
+
 	const spec = file.spec
 	let ticks = 0
 	// Enough headroom after the last launch for balls in flight to settle.
@@ -152,10 +179,13 @@ async function runOnce(
 		ballsLaunched: s.launched,
 		spins: m.spins,
 		jackpots: m.jackpots,
+		// Normal-play spins per 250 balls bought. Balls bought is launches less
+		// everything the pockets handed back, since a returned ball is fired again
+		// and was never paid for.
+		spinsPer250: (normalSpins / Math.max(1, normalLaunched - normalPaid)) * 250,
 		// Per ball paid for, not per ball fired — see `consumed`. The routing
 		// figures below stay per launch, because they are about where a ball goes
 		// once it is on the board.
-		spinsPer250: (m.spins / consumed) * 250,
 		base: (paidBySmallPockets / consumed) * 100,
 		hesoRate: s.hesoEntries / launched,
 		stageShare: s.hesoEntries === 0 ? 0 : s.stageToHeso / s.hesoEntries,

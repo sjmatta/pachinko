@@ -634,9 +634,16 @@ field.add(HESO_NAIL_X, HESO_NAIL_Y, { force: true, hugsWall: true })
  * moves the rate, because a ball arriving off this ramp is slow enough to drop
  * through anything it fits in. Below 11.2 mm it stops fitting and the rate falls
  * off a cliff. The gap is the fine adjustment; the leak is the coarse one.
+ *
+ * *Which* nails leak matters more than how many, and the response is nothing
+ * like linear. Measured over 6,000 balls apiece: {6,7,8,15,16} gives a 回転率 of
+ * 16.5, and simply closing index 8 — one nail, in a set of five holes — takes it
+ * to 29. Index 8 sits at the point where the ramp passes the start-pocket
+ * shoulder, so it is not one leak among five, it is the drain. The set below was
+ * chosen by sweeping positions rather than counts.
  */
 const RAMP_COUNT = 25
-const LEAKS = new Set([6, 7, 8, 15, 16])
+const LEAKS = new Set([6, 7, 8, 16])
 const RAMP_TOP_Y = 196
 /**
  * The outer end must sit exactly on the playfield boundary.
@@ -888,7 +895,7 @@ const spec: MachineSpec = {
 			weight: 55,
 			rounds: 4,
 			st: true,
-			stSpins: 80,
+			stSpins: 55,
 			jitanSpins: 0,
 		},
 		{
@@ -897,7 +904,7 @@ const spec: MachineSpec = {
 			weight: 20,
 			rounds: 8,
 			st: true,
-			stSpins: 80,
+			stSpins: 55,
 			jitanSpins: 0,
 		},
 		{
@@ -918,7 +925,7 @@ const spec: MachineSpec = {
 	// 15 for the 大入賞口 is the value real machines almost always use, and it is
 	// the right lever for the last few points of return: it scales the jackpot
 	// half of the payout without touching the spin rate or the base.
-	payouts: { heso: 3, denchu: 1, attacker: 15, sidePocket: 2 },
+	payouts: { heso: 3, denchu: 1, attacker: 15, sidePocket: 1 },
 
 	holdCapacity: 4,
 	gateHoldCapacity: 4,
