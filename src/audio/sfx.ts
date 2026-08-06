@@ -69,9 +69,24 @@ export class Sfx {
 		this.tone([660, 990], 0.16, 0.16, 'sine')
 	}
 
-	/** A reel coming to rest. */
+	/** A reel coming to rest. Each reel a step higher than the last. */
 	reelStop(index: number): void {
 		this.tone([420 + index * 120], 0.1, 0.13, 'square')
+	}
+
+	/**
+	 * 電チュー — the electric tulip's solenoid.
+	 *
+	 * Short, mechanical and pitched well below the ball clatter, so it carries
+	 * through it. During ST this is the sound the player is actually tracking.
+	 */
+	tulip(): void {
+		this.tone([180, 240], 0.09, 0.15, 'square')
+	}
+
+	/** The tray is empty and the feed has stopped. */
+	empty(): void {
+		this.tone([300, 220], 0.32, 0.12, 'triangle')
 	}
 
 	reachSting(): void {

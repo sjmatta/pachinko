@@ -78,7 +78,7 @@ async function play(seconds: number) {
 	for (let i = 0; i < Math.ceil(seconds / SIM_DT); i++) {
 		// Play the side the machine tells you to, exactly as the soak harness
 		// does; a fixed handle measures a player ignoring the 右打ち sign.
-		game.setHandle(game.machine.hitSide === 'RIGHT' ? 0.55 : 0.38, true)
+		game.setHandle(game.machine.hitSide === 'RIGHT' ? 0.85 : 0.23, true)
 		game.step()
 	}
 	return {

@@ -23,6 +23,9 @@ async function main(): Promise<void> {
 	const canvas = document.querySelector<HTMLCanvasElement>('#stage')!
 	const hudRoot = document.querySelector<HTMLElement>('#hud')!
 
+	let paused = false
+	let lastEmptyNotice = -Infinity
+
 	const game = await Game.create(boardFile as BoardFile, Date.now() >>> 0, 500)
 	const scene = new Scene(canvas, game.board)
 	const hud = new Hud(hudRoot)
@@ -39,6 +42,25 @@ async function main(): Promise<void> {
 		addEventListener(evt, () => sfx.unlock(), { once: true })
 	}
 
+	// Mute and pause. Both exist for the handheld targets more than the browser:
+	// a Steam Deck gets picked up and put down mid-session, and a machine that
+	// keeps clattering while the player is doing something else is a machine
+	// they turn off.
+	addEventListener('keydown', (e) => {
+		if (e.repeat) return
+		if (e.code === 'KeyM') {
+			sfx.muted = !sfx.muted
+			scene.lcd.showBanner(sfx.muted ? '消音' : '音声オン', 1.1, '#7fd6ff')
+		}
+		if (e.code === 'KeyP' || e.code === 'Escape') {
+			paused = !paused
+			// Drop the handle on the way in, so the feed does not resume by
+			// itself the instant play restarts.
+			if (paused) game.setHandle(0, false)
+			scene.lcd.showBanner(paused ? '一時停止' : '', paused ? 999 : 0, '#ffd166')
+		}
+	})
+
 	// ── Presentation subscribes; it never talks back ───────────────────────
 	game.sim.events.on('nailHit', ({ speed }) => sfx.click(speed))
 	game.machine.events.on('payout', () => sfx.pocket())
@@ -47,7 +69,6 @@ async function main(): Promise<void> {
 		if (draw.pattern === 'SUPER_REACH') sfx.reachSting()
 	})
 	game.machine.events.on('spinStop', ({ draw }) => {
-		sfx.reelStop(2)
 		if (draw.outcome === 'LOSE' && draw.pattern === 'NEAR_MISS') {
 			scene.lcd.showBanner('おしい！', 1.2, '#7fd6ff')
 		}
@@ -64,15 +85,33 @@ async function main(): Promise<void> {
 		if (hitSide === 'RIGHT' && mode !== 'JACKPOT') scene.lcd.showBanner('右打ち！', 2, '#ff5d7e')
 		if (mode === 'NORMAL') scene.lcd.showBanner('左打ちに戻してください', 2.2, '#7fd6ff')
 	})
+	// The electric tulip. On a real machine this is a distinct mechanical clack
+	// and it is the cue the player is listening for during ST — it means a ball
+	// is about to be worth something.
+	game.machine.events.on('denchu', ({ open }) => {
+		if (open) sfx.tulip()
+	})
+	// An empty tray used to be completely silent: the feed simply stopped and
+	// nothing on screen said why.
+	game.machine.events.on('launchBlocked', () => {
+		if (performance.now() - lastEmptyNotice < 4000) return
+		lastEmptyNotice = performance.now()
+		scene.lcd.showBanner('玉切れ', 2, '#ff5d7e')
+		sfx.empty()
+	})
+	// Three reels stop, at 35%, 55% and 100% of the spin. One `spinStop` sound
+	// for all three left the first two landing in silence, which reads as the
+	// machine having missed them.
+	scene.lcd.onReelStop = (index) => sfx.reelStop(index)
 
 	// Reused every frame so the render path allocates nothing.
 	const ballBuffer = new Float32Array(MAX_BALLS * 2)
+	const windmillAngles: number[] = game.sim.built.windmills.map(() => 0)
+	let handleStrength = 0
 
 	const loop = new FixedStepLoop(
 		() => {
-			const handle = input.poll()
-			game.setHandle(handle.strength, handle.engaged)
-			game.step()
+			if (!paused) game.step()
 		},
 		(alpha, frameDt) => {
 			let n = 0
@@ -85,7 +124,10 @@ async function main(): Promise<void> {
 				n++
 			})
 			scene.setBallPositions(ballBuffer, n)
-			scene.setWindmillAngles(game.sim.built.windmills.map((w) => w.body.rotation()))
+			for (let i = 0; i < windmillAngles.length; i++) {
+				windmillAngles[i] = game.sim.built.windmills[i]!.body.rotation()
+			}
+			scene.setWindmillAngles(windmillAngles)
 
 			for (const m of game.board.movers) {
 				const t = game.sim.moverOpenness(m.id)
@@ -117,7 +159,13 @@ async function main(): Promise<void> {
 				jackpotBalls: machine.currentJackpotBalls,
 			})
 			scene.render()
-			hud.update(machine, game.sim, input.poll().strength)
+			hud.update(machine, game.sim, handleStrength, paused)
+		},
+		// Once per displayed frame, ahead of the steps it feeds.
+		(frameDt) => {
+			const handle = input.poll(frameDt)
+			handleStrength = handle.strength
+			if (!paused) game.setHandle(handle.strength, handle.engaged)
 		},
 	)
 

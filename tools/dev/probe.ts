@@ -31,7 +31,7 @@ async function main(): Promise<void> {
 	await initPhysics()
 	const game = await Game.create(file, 21, 1e7)
 	for (let i = 0; i < Math.ceil(seconds / SIM_DT); i++) {
-		game.setHandle(game.machine.hitSide === 'RIGHT' ? 0.55 : 0.4, true)
+		game.setHandle(game.machine.hitSide === 'RIGHT' ? 0.85 : 0.23, true)
 		game.step()
 	}
 

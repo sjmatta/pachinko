@@ -141,3 +141,10 @@ body,
 	color: var(--dim);
 	max-width: 46ch;
 }
+
+/* Paused. The dial is the one control that must not look live, since the
+   player can still move it while nothing is being fired. */
+#hud.paused #handle {
+	filter: grayscale(1);
+	opacity: 0.5;
+}

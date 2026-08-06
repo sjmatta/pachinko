@@ -27,8 +27,9 @@ export class Hud {
 			<div></div>
 			<div class="row bottom">
 				<div class="hint">
-					Hold <b>Space</b> to fire · <b>↑ ↓</b> trims the handle · or drag the dial.
-					A gamepad's right trigger works as the handle directly.
+					Hold <b>Space</b> to fire · <b>↑ ↓</b> trims the handle, <b>Shift</b> for fine
+					· or drag the dial. A gamepad's right trigger works as the handle directly.
+					<b>M</b> mutes · <b>P</b> pauses.
 					Turn it lightly to play the left field toward the start pocket; turn it up
 					to send balls over the top into the right lane.
 				</div>
@@ -49,7 +50,7 @@ export class Hud {
 		return this.el.querySelector('#handle')!
 	}
 
-	update(machine: Machine, sim: SimWorld, strength: number): void {
+	update(machine: Machine, sim: SimWorld, strength: number, paused = false): void {
 		const set = (k: string, v: string) => {
 			const node = this.chips[k]
 			if (node && node.textContent !== v) node.textContent = v
@@ -73,5 +74,6 @@ export class Hud {
 		const pct = Math.round(strength * 100)
 		this.handleFill.style.height = `${pct}%`
 		this.handleValue.textContent = `${pct}%`
+		this.el.classList.toggle('paused', paused)
 	}
 }

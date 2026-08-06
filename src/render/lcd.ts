@@ -38,7 +38,6 @@ interface ReelState {
 	/** Continuous position; the integer part selects the symbol. */
 	pos: number
 	speed: number
-	stopAt: number | null
 }
 
 export interface LcdView {
@@ -62,9 +61,9 @@ export class Lcd {
 	private readonly texture: THREE.CanvasTexture
 
 	private reels: ReelState[] = [
-		{ pos: 0, speed: 0, stopAt: null },
-		{ pos: 0, speed: 0, stopAt: null },
-		{ pos: 0, speed: 0, stopAt: null },
+		{ pos: 0, speed: 0 },
+		{ pos: 0, speed: 0 },
+		{ pos: 0, speed: 0 },
 	]
 	private draw: SpinDraw | null = null
 	private elapsed = 0
@@ -120,17 +119,28 @@ export class Lcd {
 		// Reels stop left to right; the last one carries the whole story, which
 		// is why the machine spends most of a reach animation on it.
 		const stops = [0.35, 0.55, 1.0]
-		this.reels = draw.reels.map((symbol, i) => ({
+		this.reels = draw.reels.map((_symbol, i) => ({
+			// Where a reel starts is pure decoration — it is overwritten by the
+			// decided symbol before it stops. Deliberately not from the game's
+			// seeded streams: nothing in this class may touch those.
 			pos: Math.random() * SYMBOLS.length,
 			speed: 14 + i * 1.5,
-			stopAt: symbol + stops[i]! * 0,
 		}))
 		this.reelStops = draw.reels
 		this.stopTimes = stops.map((f) => this.duration * f)
+		this.stopped = [false, false, false]
 	}
 
 	private reelStops: [number, number, number] = [0, 0, 0]
 	private stopTimes: number[] = [0, 0, 0]
+	private stopped = [false, false, false]
+
+	/**
+	 * Called as each reel lands, because this class is the only thing that knows
+	 * when that happens — the machine emits one `spinStop` for the whole spin,
+	 * while the reels come to rest at 35%, 55% and 100% of it.
+	 */
+	onReelStop: (index: number) => void = () => {}
 
 	showBanner(text: string, seconds: number, colour = '#ffd166'): void {
 		this.banner = { text, until: this.time + seconds, colour }
@@ -145,6 +155,10 @@ export class Lcd {
 			if (this.elapsed < this.stopTimes[i]!) {
 				r.pos = (r.pos + r.speed * dt) % SYMBOLS.length
 			} else {
+				if (!this.stopped[i]) {
+					this.stopped[i] = true
+					this.onReelStop(i)
+				}
 				// Ease onto the decided symbol rather than snapping, so the last
 				// reel crawling into place reads as tension instead of a glitch.
 				const target = this.reelStops[i]!
@@ -211,9 +225,9 @@ export class Lcd {
 		for (let i = 0; i < 3; i++) {
 			const x = x0 + i * (boxW + gap)
 			const spinning = this.draw !== null && this.elapsed < this.stopTimes[i]!
-			// The third reel glows during a reach — the machine telling you it
-			// knows something. It does.
-			const hot = reach && i === 2 && !spinning === false
+			// The third reel glows while it is the one still turning — the
+			// machine telling you it knows something. It does.
+			const hot = reach && i === 2 && spinning
 			c.save()
 			c.fillStyle = 'rgba(0,0,0,0.55)'
 			roundRect(c, x, cy - boxH / 2, boxW, boxH, 18)

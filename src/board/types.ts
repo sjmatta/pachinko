@@ -18,7 +18,15 @@ export interface Vec2 {
 	y: number
 }
 
-export type MaterialName = 'nail' | 'rail' | 'guide' | 'plastic' | 'pocket' | 'stage'
+export type MaterialName =
+	| 'nail'
+	| 'rail'
+	| 'guide'
+	| 'plastic'
+	| 'pocket'
+	| 'stage'
+	/** The centre unit's top cover — see the note on it in the generator. */
+	| 'cover'
 
 export interface Material {
 	restitution: number

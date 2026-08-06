@@ -39,6 +39,17 @@ const STALL_SPEED = 2.5
 const STALL_SECONDS = 0.4
 /** Size of the cabinet's hum, as felt by a resting ball. */
 const NUDGE = 7
+/**
+ * How hard the nudge is allowed to get, as a multiple of `NUDGE`, once a ball
+ * has spent `WEDGED_SECONDS` going nowhere.
+ */
+const NUDGE_MAX_SCALE = 3
+/**
+ * Impact speed at which the nail-contact noise is exactly its nominal size, in
+ * world units per second. Measured as the median speed of a ball working its
+ * way down the middle of the field.
+ */
+const NOISE_REF_SPEED = 90
 
 interface BallSlot {
 	body: RAPIER.RigidBody
@@ -335,10 +346,28 @@ export class SimWorld {
 		slot.stalledFor += SIM_DT
 		if (slot.stalledFor < STALL_SECONDS) return
 		slot.stalledFor = 0
+
+		/**
+		 * Escalate, rather than shoving every resting ball equally hard.
+		 *
+		 * A cabinet's hum is a horizontal vibration, and most balls this fires on
+		 * are not wedged at all — they are queued in the drain, or riding the
+		 * gathering ramp, or sitting on a closed shutter waiting for a round.
+		 * Lifting those bodily off the surface, which is what an unconditional
+		 * upward kick does, is both unphysical and visible.
+		 *
+		 * So the ordinary case is lateral only. The vertical component is held
+		 * back for a ball that has also failed to get anywhere — `anchoredFor`
+		 * already measures exactly that, and by the time it is large the ball is
+		 * genuinely trapped and deserves the shove. At the limit this is three
+		 * times the old kick, so nothing that used to be freed stays stuck.
+		 */
+		const trapped = Math.min(1, slot.anchoredFor / WEDGED_SECONDS)
+		const scale = NUDGE * (1 + (NUDGE_MAX_SCALE - 1) * trapped)
 		slot.body.setLinvel(
 			{
-				x: v.x + this.rng.contact.gaussian(0, NUDGE),
-				y: v.y + Math.abs(this.rng.contact.gaussian(0, NUDGE)),
+				x: v.x + this.rng.contact.gaussian(0, scale),
+				y: v.y + Math.abs(this.rng.contact.gaussian(0, scale)) * trapped,
 			},
 			true,
 		)
@@ -378,7 +407,15 @@ export class SimWorld {
 	private onNailContact(ballId: number, slot: BallSlot): void {
 		const v = slot.body.linvel()
 		const speed = Math.hypot(v.x, v.y)
-		const kick = this.rng.contact.gaussian(0, this.noiseScale)
+		// Scaled by the impact, because the impact is what causes it: the ball
+		// is knocked out of plane by the nail and comes back down somewhere
+		// else, and how far it strays depends on how hard it hit. A flat kick
+		// nudges a ball creeping through the 寄せ funnel exactly as hard as one
+		// arriving at three metres a second, which is both wrong and worst
+		// precisely where the board is most sensitive. Normalised at the speed a
+		// ball crosses the middle of the field, so the average deflection over a
+		// run — and therefore the balance — is what it was.
+		const kick = this.rng.contact.gaussian(0, this.noiseScale * (speed / NOISE_REF_SPEED))
 		slot.body.setLinvel({ x: v.x + kick, y: v.y }, true)
 		if (speed > 12) {
 			const t = slot.body.translation()

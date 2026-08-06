@@ -22,7 +22,7 @@ async function main(): Promise<void> {
 	const file = JSON.parse(
 		readFileSync(resolve(here, '../../boards/standard-light.board.json'), 'utf8'),
 	) as BoardFile
-	const handle = Number(process.argv[2] ?? '0.35')
+	const handle = Number(process.argv[2] ?? '0.23')
 	await initPhysics()
 	const game = await Game.create(file, Number(process.argv[3] ?? '1'), 1e7)
 

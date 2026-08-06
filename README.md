@@ -18,6 +18,12 @@ npm run board      # regenerate boards/standard-light.board.json
 npm run shots      # screenshot the running game (needs `npm run dev`)
 ```
 
+**Controls.** Hold <kbd>Space</kbd> to fire; <kbd>↑</kbd>/<kbd>↓</kbd> turn the
+handle, with <kbd>Shift</kbd> for fine adjustment; or drag the dial. A gamepad's
+right trigger *is* the handle, which is the closest of the three to the real
+control and the reason a Steam Deck suits this game. <kbd>M</kbd> mutes,
+<kbd>P</kbd> pauses.
+
 ## The one idea the architecture is built around
 
 On a real pachinko machine the outcome of a spin is decided **the instant a ball
@@ -49,11 +55,11 @@ Everything below is real machine behaviour, not an approximation of it:
 
 - **The handle** is an analog dial, and it is the entire skill of the game. How
   far it is turned sets how hard the hammer strikes, which sets how far around
-  the guide rail the ball travels before the hood at the rail exit throws it into
-  the playfield. Turn it lightly and the ball drops into the left field toward
-  the start pocket; turn it up and it carries over the centre unit into the right
-  lane. **左打ち and 右打ち are not modes** — there is one dial, one hood, and
-  ballistics.
+  the guide rail the ball gets before it can no longer hold the curve and is
+  thrown into the playfield. Turn it lightly and it lets go high on the left and
+  drops toward the start pocket; turn it up and it holds the rail over the top
+  and round into the right lane. **左打ち and 右打ち are not modes** — there is one
+  dial and one inequality, `v² ≥ g·r·sinθ`. See *The handle* below.
 - **Feed rate** is fixed at 100 balls a minute, as the law requires. No amount of
   enthusiasm on the handle speeds it up.
 - **The foul return** catches shots too weak to make it round the rail.
@@ -74,6 +80,57 @@ Everything below is real machine behaviour, not an approximation of it:
   spin from the previous ball is a real source of variance.
 - **The centre stage** (ステージ) — see below.
 - **The nails** are the payout rate. There is no fudge factor anywhere.
+
+## The handle
+
+The dial is the whole game, so it is worth saying exactly how it does anything,
+because for a while it did not.
+
+A ball running inside the outer rail is held there by the rail's push, and a rail
+can only push inward. So it stays on the rail exactly as long as the curve it
+needs is one gravity has not already supplied:
+
+```
+v² ≥ g · r · sinθ
+```
+
+Climbing the left side, `sinθ` rises toward 1 at the top, so every ball
+eventually reaches an angle it cannot hold — and *where* it lets go is set by how
+fast it is going. That is a continuous, monotonic map from the dial to a release
+point, and it costs nothing: it is what a circular rail does.
+
+Two things had thrown it away.
+
+**The channel opened too near the top.** The inner rail used to stop at 105°, and
+105° and 90° differ by almost nothing in `sinθ` — 0.966 against 1.0. A ball fast
+enough to reach the opening at all was already fast enough to carry on over the
+top, so every shot was released at the same point and the dial selected nothing.
+A hood had been bolted over the mouth to break the shots apart again, and it
+could not work: anything anchored to the outer rail stands in the path of the
+very ball meant to ride past it, so the hood decided the route instead of the
+handle. Eight hood geometries were measured — short lip, long lip, gentle spiral,
+springy, dead — and the share of balls reaching the right lane stayed within
+noise of 20% across the whole dial for all of them.
+
+**The right lane had no wall above it.** Its inner wall started at 354°, level
+with the gate, so the entire upper-right quadrant of the playfield drained
+straight into the lane over an open edge. Balls arrived there by wandering, not
+by being aimed.
+
+Opening the channel at 150° gives the peel-off somewhere to happen, and carrying
+the lane's inner wall up to 55° means the only way in is over the top. Measured
+across the dial, balls launched per handle position:
+
+| handle | 0.15 | 0.20 | 0.30 | 0.40 | 0.50 | 0.60 | 0.70 | 0.85 | 0.95 |
+|---|---|---|---|---|---|---|---|---|---|
+| spins per 250 | 14.8 | **22.4** | 18.2 | 12.1 | 9.1 | 4.6 | 1.5 | 1.0 | 0.2 |
+| start pocket | 1 in 22 | **1 in 15** | 1 in 18 | 1 in 26 | 1 in 32 | 1 in 63 | 1 in 167 | 1 in 357 | 1 in 2500 |
+| foul | 13.8% | 6.3% | 1.0% | 0.6% | 0% | 0% | 0.2% | 0% | 0% |
+
+Below about 0.18 the ball cannot hold the rail as far as the opening, slides back
+and is refunded — the authentic penalty for under-turning. The reference left-hit
+position is **0.23** and right-hit is **0.85**; those are what the soak harness
+and the regression tests use.
 
 ## Physics
 
@@ -147,19 +204,23 @@ so a machine with a base of 30 launches about 357 balls for each 250 paid for.
 Measured the loose way, this board read 14.9; measured properly it was 12.2, and
 the difference was entirely ST spins and recycled balls.
 
-Current reference board — **eight seeds × 10,000 balls**, handle 0.38 / 0.55:
+Current reference board — **eight seeds × 10,000 balls**, handle 0.23 / 0.85:
 
 | | mean of 8 seeds | real machines |
 |---|---|---|
-| 回転率 (spins per 250 bought) | 22.7 | 15–25 |
-| start-pocket rate | 4.9% (1 in 20) | 1 in 15–20 |
-| foul rate | 0.25% | low |
-| stuck (watchdog) | 0.07% | 0 |
-| base (returned per 100) | 30.0 | 25–35 |
-| **return** | **91.3%** | 85–100% |
+| 回転率 (spins per 250 bought) | 20.8 | 15–25 |
+| start-pocket rate | 4.4% (1 in 23)¹ | 1 in 15–20 |
+| foul rate | 2.5% | low |
+| stuck (watchdog) | 0.001% | 0 |
+| base (returned per 100) | 32.9 | 25–35 |
+| **return** | **97.2%** | 85–100% |
+
+¹ over the whole run, which now includes real right-hit time where the start
+pocket is unreachable by design. At the left-hit position on its own it is 1 in
+15 — see *The handle*.
 
 **Read the return figure with its spread.** Across those eight seeds it ranged
-from 59% to 158%. That is not instability in the simulation — it is the ST chain,
+from 68% to 174%. That is not instability in the simulation — it is the ST chain,
 and it is authentic: 10,000 balls contains only about six jackpots, and whether
 two or three of them chain decides the whole number. The consequence for tuning
 is concrete: **a single seed tells you almost nothing about return**, and the
@@ -183,9 +244,16 @@ from 1 in 29 to 1 in 20 at the start pocket meant closing one ramp leak, halving
 the 一般入賞口 payout to hold the base at 30, and cutting ST from 80 spins to 55
 to hold the return.
 
+Geometry moves these numbers as hard as the spec does, and it is easy to forget
+which one you changed. Sealing the right lane took a right-hit ball's chance of
+reaching the attacker from 57% to about 95%, so jackpot rounds that used to time
+out part-collected began taking their full ten balls every time. Return went from
+91% to 160% with the spec untouched, and ST came down from 55 spins to 30 to put
+it back.
+
 ```bash
-npm run soak -- --balls 20000 --seed 7 --handle 0.38 --rightHandle 0.55
-npm run soak -- --sweep handle:0.2:1.0:0.05 --balls 4000
+npm run soak -- --balls 20000 --seed 7 --handle 0.23 --rightHandle 0.85
+npm run soak -- --sweep handle:0.15:0.95:0.05 --balls 2500
 npm run soak -- --sweep hesoGap:11.2:13.0:0.2 --balls 4000
 ```
 

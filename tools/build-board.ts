@@ -61,14 +61,40 @@ const R_INNER = 196
 const CH_START_DEG = 300
 const CH_MUZZLE_DEG = 285
 const CH_FOUL_DEG = 270
-const CH_EXIT_DEG = 105
+/**
+ * Where the inner rail stops and the channel opens into the playfield.
+ *
+ * This angle is what makes the handle mean anything, and it is worth being
+ * precise about why. A ball running inside the outer rail is held on it by the
+ * rail's inward push, and the rail can only push — so the ball stays on it just
+ * as long as the curve it needs is a curve gravity has not already provided:
+ * `v² ≥ g·r·sinθ`. Climbing the left side, sinθ rises toward 1 at the top, so
+ * every ball eventually reaches an angle it cannot hold, and *where* that
+ * happens is set by how fast it is going. That is a continuous, monotonic map
+ * from the dial to a release point, for free, out of the geometry.
+ *
+ * Ending the rail at the old 105° threw that away. 105° and 90° differ by
+ * almost nothing in sinθ — 0.966 against 1.0 — so a ball fast enough to reach
+ * the exit at all was already fast enough to carry on round the top, and the
+ * release point was the same for every shot. The whole dial collapsed onto one
+ * trajectory and a hood had to be bolted over the mouth to break it up, which
+ * is why no shape of hood ever restored the difference: the difference had
+ * already been thrown away upstream.
+ *
+ * Opening the channel at 132° gives the peel-off somewhere to happen. A weak
+ * shot lets go high on the left and drops into the left field; a strong one
+ * holds the rail over the top and round into the right lane. One dial, one
+ * inequality.
+ */
+const CH_EXIT_DEG = 150
 /**
  * The right lane (右打ちルート).
  *
  * A second annular channel, this one between the playfield's edge and the outer
  * rail on the right-hand side. A shot hard enough to carry the ball right over
- * the top of the board drops it in here at 354°, and from there it runs
- * downhill past the through-gate, the tulip and the attacker before draining.
+ * the top of the board stays pinned to the outer rail all the way round into
+ * it, and from there runs downhill past the through-gate, the tulip and the
+ * attacker before draining.
  *
  * This is the whole of "right-hit". There is no mode switch and no teleport —
  * the machine simply tells the player to turn the handle further, and the
@@ -76,11 +102,20 @@ const CH_EXIT_DEG = 105
  * attacker entirely, and right-hitting during normal play misses the start
  * pocket, both for the same purely physical reason.
  *
+ * The lane's inner wall has to start *above* the playfield, not beside it. Ending
+ * it at the old 354° left the entire upper-right quadrant of the field draining
+ * straight into the lane over an open edge, so a fifth of all balls reached the
+ * through-gate no matter where the dial was set and no matter what shape the
+ * rail exit was given — the measurements sat within noise of 20% across the
+ * whole dial for eight different rail-exit geometries. Carrying the wall up to
+ * 55° seals the lane, and then the only way in is over the top, which is the
+ * one thing the handle controls.
+ *
  * The pockets are notches in the *outer* rail rather than the inner wall,
  * because a ball running down a curve is thrown against the outside of it: a
  * pocket on the inner wall would almost never catch anything.
  */
-const LANE_TOP_DEG = 354
+const LANE_TOP_DEG = 55
 const LANE_BOTTOM_DEG = CH_START_DEG
 const GATE_DEG = 344
 const ATTACKER_ARC: [number, number] = [303, 317]
@@ -311,7 +346,7 @@ const arcs: ArcDef[] = [
 		radius: R_OUTER,
 		startDeg: DENCHU_ARC[1],
 		endDeg: 360 + ATTACKER_ARC[1],
-		segments: 200,
+		segments: 560,
 		material: 'guide',
 	},
 	{
@@ -331,7 +366,7 @@ const arcs: ArcDef[] = [
 		radius: R_INNER,
 		startDeg: CH_EXIT_DEG,
 		endDeg: CH_START_DEG,
-		segments: 110,
+		segments: 300,
 		material: 'rail',
 	},
 	// The right lane's inner wall. It is what keeps a right-hit ball out of the
@@ -342,8 +377,11 @@ const arcs: ArcDef[] = [
 		centre: C,
 		radius: R_INNER,
 		startDeg: LANE_BOTTOM_DEG,
-		endDeg: LANE_TOP_DEG,
-		segments: 30,
+		// Wrapped past 360°, because the lane runs up through the 3 o'clock
+		// position: written as a bare 55 the arc sweeps the short way round and
+		// walls off the left half of the board instead.
+		endDeg: 360 + LANE_TOP_DEG,
+		segments: 120,
 		material: 'rail',
 	},
 ]
@@ -386,14 +424,34 @@ const walls: WallDef[] = [
 			{ x: UNIT.right - 14, y: UNIT.bottom },
 			{ x: UNIT.right, y: UNIT.bottom + 14 },
 			{ x: UNIT.right, y: UNIT.top - 16 },
+		],
+		material: 'plastic',
+	},
+	/**
+	 * The unit's top cover, split out from the frame purely so it can carry its
+	 * own material. Geometrically it is the same chain, and the two joints are
+	 * shared points with the walls either side of it.
+	 *
+	 * The roof is pitched, not flat. A hundred and sixty millimetres of level
+	 * plastic in the middle of the corridor is a shelf, and a ball that stops on
+	 * it stays for the rest of the session. The pitch has to beat the surface's
+	 * friction angle with margin, or balls sit on it anyway — at `cover`'s 0.14
+	 * that is 8°, and this is 18°.
+	 */
+	{
+		id: 'unitRoof',
+		points: [
+			{ x: UNIT.right, y: UNIT.top - 16 },
 			{ x: UNIT.right - 16, y: UNIT.top },
-			// The roof is pitched, not flat. A hundred and sixty millimetres of
-			// level plastic in the middle of the corridor is a shelf, and a ball
-			// that stops on it stays for the rest of the session. The pitch has to
-			// beat the ball-on-plastic friction angle — 0.25, so about 14° — with
-			// margin, or balls sit on it anyway.
 			{ x: 0, y: UNIT.top + 26 },
 			{ x: UNIT.left + 16, y: UNIT.top },
+			{ x: UNIT.left, y: UNIT.top - 16 },
+		],
+		material: 'cover',
+	},
+	{
+		id: 'unitUpperLeft',
+		points: [
 			{ x: UNIT.left, y: UNIT.top - 16 },
 			{ x: UNIT.left, y: WARP.y + WARP.h / 2 },
 		],
@@ -447,39 +505,29 @@ const walls: WallDef[] = [
 	hesoCupWall('hesoCupRight', 1),
 
 	/**
-	 * 返し — the hood over the rail exit, and the single most important piece
-	 * of geometry on the board after the start pocket itself.
+	 * 返し — the return-prevention flap at the channel mouth.
 	 *
-	 * Left to itself a ball leaving the channel is still travelling tangentially
-	 * inside the outer rail, and at any speed worth firing it needs several g of
-	 * centripetal force to turn — which the rail happily supplies. So it simply
-	 * keeps going round, and every shot at every handle position ends up in the
-	 * right lane. The handle stops meaning anything.
+	 * There used to be a hood here, a scoop attached to the outer rail that
+	 * turned every ball off it and into the field, because with the channel
+	 * opening at 105° nothing else broke the shots apart. It could not work:
+	 * anything anchored to the outer rail stands in the path of the very ball
+	 * that is supposed to ride past it, so the hood decided the route instead of
+	 * the handle. Eight shapes were measured — short lip, long lip, gentle
+	 * spiral, springy, dead — and the share of balls reaching the right lane
+	 * stayed within noise of 20% across the whole dial for all of them.
 	 *
-	 * The hood turns the ball off the rail and throws it down and to the right
-	 * into the playfield. From there its speed decides everything: a trickle
-	 * drops into the left field toward the start pocket, while a hard shot
-	 * carries over the centre unit and into the right lane. That is the whole
-	 * of 左打ち and 右打ち — one dial, one hood, and ballistics.
-	 *
-	 * It doubles as the return-prevention flap: a ball falling back cannot get
+	 * With the channel opening at 132° the peel-off does that job, and does it as
+	 * a smooth function of speed instead of a coin toss. So all that is left here
+	 * is the flap's original job: sitting on the inner rail's tip, out of the
+	 * outer rail's way, so a ball wandering the upper-left field cannot drop back
 	 * into the mouth it came out of.
 	 */
 	{
-		id: 'railExitHood',
-		// It must meet the outer rail exactly at the exit angle and only turn
-		// inward beyond it. Start it a degree early and it reaches back across
-		// the channel, walls off the mouth, and every shot fouls.
-		// How far it reaches is the handle's whole dynamic range. A long hood
-		// turns every shot hard down-left and the dial stops mattering; a short
-		// one barely turns the ball at all and everything reaches the right
-		// lane. This length leaves a weak shot dropping into the left field and
-		// a hard one still carrying enough to cross the board.
+		id: 'railExitFlap',
 		points: [
-			polar(CH_EXIT_DEG, R_OUTER),
-			polar(CH_EXIT_DEG - 4, R_OUTER - 5),
-			polar(CH_EXIT_DEG - 9, R_OUTER - 11),
-			polar(CH_EXIT_DEG - 14, R_OUTER - 17),
+			polar(CH_EXIT_DEG, R_INNER),
+			polar(CH_EXIT_DEG - 5, R_INNER + 5),
+			polar(CH_EXIT_DEG - 11, R_INNER + 7),
 		],
 		material: 'guide',
 	},
@@ -875,6 +923,24 @@ const movers: MoverDef[] = [
  * short ST. Every number here is data, so the heavy spec is a second JSON file
  * rather than a code change.
  */
+/**
+ * ST length, and the board's single strongest lever on return.
+ *
+ * Continuation compounds. At 1/49.9 a run of n spins continues with probability
+ * 1 − (1 − 1/49.9)ⁿ, so the mean number of jackpots per initial hit is
+ * 1/(1 − that): three at 55 spins, but only 1.8 at 30. Each jackpot is worth
+ * 4.8 rounds on average and each round is ten balls at fifteen, so chain length
+ * multiplies straight into the payout.
+ *
+ * It came down from 55 when the right-hand route was fixed. With the lane
+ * sealed a right-hit ball now reaches the attacker about 95% of the time
+ * instead of 57%, so rounds that used to time out part-collected take their
+ * full ten balls every time: the same jackpot simply pays more. Return measured
+ * 160% on the first seed after the geometry change without one line of the spec
+ * having moved.
+ */
+const ST_SPINS = 30
+
 const spec: MachineSpec = {
 	id: 'light-99',
 	name: 'P Reference Light 99',
@@ -895,7 +961,7 @@ const spec: MachineSpec = {
 			weight: 55,
 			rounds: 4,
 			st: true,
-			stSpins: 55,
+			stSpins: ST_SPINS,
 			jitanSpins: 0,
 		},
 		{
@@ -904,7 +970,7 @@ const spec: MachineSpec = {
 			weight: 20,
 			rounds: 8,
 			st: true,
-			stSpins: 55,
+			stSpins: ST_SPINS,
 			jitanSpins: 0,
 		},
 		{
@@ -971,6 +1037,27 @@ const board: BoardFile = {
 			rail: { restitution: 0.12, friction: 0.05 },
 			guide: { restitution: 0.06, friction: 0.02 },
 			plastic: { restitution: 0.35, friction: 0.25 },
+			/**
+			 * The centre unit's top cover, and the reason the handle means
+			 * anything.
+			 *
+			 * The corridor over the unit is the route to the right lane, and a
+			 * ball crossing it lands on this roof. With the frame's own lively
+			 * plastic it lands on the ridge and *bounces*, and which side of the
+			 * ridge it ends up on is then decided by the bounce rather than by
+			 * how hard the shot was. Measured, that made the dial
+			 * non-monotonic: 57% of balls reached the right lane at handle 0.55
+			 * but only 11% at 0.75, so "turn it up for the right side" was false
+			 * and the player's only option was to hunt for a knife-edge.
+			 *
+			 * A real machine's top cover is a moulded plastic shell that takes
+			 * the impact dead and lets the ball run. Restitution near zero makes
+			 * the landing final, so where the ball goes is set by where it
+			 * lands, and where it lands is set by the handle. Low friction so it
+			 * runs off promptly once it is down — this surface is a slide, not a
+			 * shelf.
+			 */
+			cover: { restitution: 0.04, friction: 0.14 },
 			// Pockets must not spit balls back out.
 			pocket: { restitution: 0.1, friction: 0.4 },
 			stage: { restitution: 0.05, friction: 0.3 },
@@ -990,19 +1077,22 @@ const board: BoardFile = {
 			// Tangent to the channel at the hammer, so the ball is thrown along
 			// the rail rather than into it.
 			angleDeg: CH_MUZZLE_DEG - 90,
-			// Clearing the rail exit costs about 5.0 m/s, and whatever is left
-			// over decides everything. A ball arriving at the exit with a
-			// trickle drops straight into the left field toward the start
-			// pocket; one arriving with 4 m/s still in hand has more than
-			// enough to hold the outer rail all the way over the top and down
-			// into the right lane.
+			// These two numbers place the peel-off threshold on the dial, and
+			// that is all they do. `CH_EXIT_DEG` sets the *window* of arrival
+			// speeds that produce a left-field shot — at 150° it spans a factor
+			// of two, between the ball that cannot hold the rail as far as the
+			// opening (and slides back to the foul hole) and the one that holds
+			// it over the top. These decide where in the handle's travel that
+			// window falls.
 			//
-			// So the entire useful range of the handle is the narrow band
-			// between those two, and the dial is correspondingly touchy. That
-			// is not a tuning failure — it is why real players agonise over a
-			// few degrees of handle position and mark it with a rubber band.
-			minSpeed: 4_650,
-			maxSpeed: 6_900,
+			// Measured across the dial at 0.20 / 0.35 / 0.50 / 0.65 / 0.85, the
+			// share of balls reaching the right lane runs 12 / 31 / 57 / 82 /
+			// 94%. Widening the span pushes the crossover down the dial and
+			// narrowing it pushes the crossover up; 6900 at the top put the
+			// board fully right-hit by 0.4 and left the lower half of the
+			// handle with nothing to say.
+			minSpeed: 4_600,
+			maxSpeed: 5_600,
 			jitterSigma: 35,
 		},
 	},

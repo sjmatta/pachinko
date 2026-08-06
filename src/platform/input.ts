@@ -17,9 +17,31 @@ export interface HandleState {
 }
 
 export interface InputSource {
-	poll(): HandleState
+	/**
+	 * Read the handle. `dt` is the wall-clock time since the last poll, in
+	 * seconds, and sources that ramp a value over time must use it rather than
+	 * counting calls.
+	 *
+	 * Getting that wrong is not a small error. This used to be called from inside
+	 * the 240 Hz fixed step and trim a fixed amount per call, which made the
+	 * keyboard's dial speed a function of the physics rate: a 200 ms tap of the
+	 * arrow key swept more than half the dial. Since where you set the dial *is*
+	 * the game, that made the keyboard unplayable for anything finer than
+	 * "left side" or "right side".
+	 */
+	poll(dt: number): HandleState
 	dispose(): void
 }
+
+/**
+ * How fast the arrow keys move the dial, in dial-fractions per second.
+ *
+ * A full sweep in about three seconds. Slow enough that a tap is a nudge of a
+ * few percent, fast enough to cross from left-hit to right-hit without waiting.
+ */
+const TRIM_PER_SECOND = 0.34
+/** Holding shift divides the trim rate by this, for placing the last percent. */
+const FINE_TRIM_DIVISOR = 6
 
 /** Pointer and touch: drag up the handle area to turn it. */
 export class PointerInput implements InputSource {
@@ -56,7 +78,7 @@ export class PointerInput implements InputSource {
 		this.state.engaged = false
 	}
 
-	poll(): HandleState {
+	poll(_dt: number): HandleState {
 		return this.state
 	}
 
@@ -68,11 +90,12 @@ export class PointerInput implements InputSource {
 	}
 }
 
-/** Keyboard: hold space to fire, arrows to trim the dial. */
+/** Keyboard: hold space to fire, arrows to trim the dial, shift to trim finely. */
 export class KeyboardInput implements InputSource {
 	private state: HandleState = { strength: 0.55, engaged: false }
 	private up = false
 	private down = false
+	private fine = false
 
 	constructor() {
 		addEventListener('keydown', this.onKey)
@@ -87,13 +110,13 @@ export class KeyboardInput implements InputSource {
 		}
 		if (e.code === 'ArrowUp') this.up = on
 		if (e.code === 'ArrowDown') this.down = on
+		this.fine = e.shiftKey
 	}
 
-	poll(): HandleState {
-		// Trim at a rate that makes single taps meaningful without making a held
-		// key sweep the whole dial instantly.
-		if (this.up) this.state.strength = clamp(this.state.strength + 0.006)
-		if (this.down) this.state.strength = clamp(this.state.strength - 0.006)
+	poll(dt: number): HandleState {
+		const rate = TRIM_PER_SECOND / (this.fine ? FINE_TRIM_DIVISOR : 1)
+		const dir = (this.up ? 1 : 0) - (this.down ? 1 : 0)
+		if (dir !== 0) this.state.strength = clamp(this.state.strength + dir * rate * dt)
 		return this.state
 	}
 
@@ -113,14 +136,17 @@ export class KeyboardInput implements InputSource {
 export class GamepadInput implements InputSource {
 	private state: HandleState = { strength: 0, engaged: false }
 
-	poll(): HandleState {
+	poll(_dt: number): HandleState {
 		const pads = navigator.getGamepads?.() ?? []
 		for (const pad of pads) {
 			if (!pad) continue
 			const trigger = pad.buttons[7]
 			if (!trigger) continue
 			this.state.strength = clamp(trigger.value)
-			this.state.engaged = trigger.value > 0.02
+			// Above a resting trigger's drift, which on a worn pad is a couple of
+			// percent — a drifting trigger that reads as "engaged" would take the
+			// handle away from the keyboard for the whole session.
+			this.state.engaged = trigger.value > TRIGGER_DEAD_ZONE
 			return this.state
 		}
 		this.state.engaged = false
@@ -130,26 +156,46 @@ export class GamepadInput implements InputSource {
 	dispose(): void {}
 }
 
+const TRIGGER_DEAD_ZONE = 0.06
+
 /**
  * Whichever source moved most recently wins, so a player can pick up a
  * controller mid-session without anything having to be configured.
+ *
+ * "Moved" is meant literally: a source whose dial value changed this frame takes
+ * the handle. Falling back to the last engaged source in list order is not good
+ * enough on its own, because an engaged-but-static source — a controller resting
+ * against the sofa, a finger left on the dial — would hold the handle
+ * indefinitely against a player actively using something else.
  */
 export class CompositeInput implements InputSource {
+	private readonly seen: number[]
 	private last: HandleState = { strength: 0.55, engaged: false }
+	/** Returned every poll, so the render loop allocates nothing. */
+	private readonly out: HandleState = { strength: 0.55, engaged: false }
 
-	constructor(private readonly sources: InputSource[]) {}
+	constructor(private readonly sources: InputSource[]) {
+		this.seen = sources.map(() => Number.NaN)
+	}
 
-	poll(): HandleState {
-		let active: HandleState | null = null
-		for (const s of this.sources) {
-			const st = s.poll()
-			if (st.engaged) active = st
+	poll(dt: number): HandleState {
+		let engaged: HandleState | null = null
+		let moved: HandleState | null = null
+		for (let i = 0; i < this.sources.length; i++) {
+			const st = this.sources[i]!.poll(dt)
+			const before = this.seen[i]!
+			this.seen[i] = st.strength
+			if (!st.engaged) continue
+			engaged ??= st
+			// NaN on the first poll, so a source cannot claim the handle merely by
+			// existing.
+			if (Math.abs(st.strength - before) > 1e-4) moved = st
 		}
-		if (active) {
-			this.last = { ...active }
-			return this.last
-		}
-		return { strength: this.last.strength, engaged: false }
+		const active = moved ?? engaged
+		if (active) this.last = { strength: active.strength, engaged: true }
+		this.out.strength = this.last.strength
+		this.out.engaged = active !== null
+		return this.out
 	}
 
 	dispose(): void {

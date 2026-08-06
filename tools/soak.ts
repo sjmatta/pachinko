@@ -7,7 +7,7 @@
  * same `Game` the browser runs, with no renderer attached, and reports the
  * figures a real machine is specified by.
  *
- *   npm run soak -- --balls 20000 --seed 7 --handle 0.32
+ *   npm run soak -- --balls 20000 --seed 7 --handle 0.23
  *   npm run soak -- --sweep handle:0.2:0.9:0.05 --balls 4000
  */
 
@@ -46,8 +46,8 @@ function parseArgs(argv: string[]): Args {
 		board: get('board', 'standard-light'),
 		balls: Number(get('balls', '20000')),
 		seed: Number(get('seed', '1')),
-		handle: Number(get('handle', '0.4')),
-		rightHandle: Number(get('rightHandle', '0.55')),
+		handle: Number(get('handle', '0.23')),
+		rightHandle: Number(get('rightHandle', '0.85')),
 		...(sweep ? { sweep } : {}),
 		quiet: argv.includes('--quiet'),
 	}
